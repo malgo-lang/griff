@@ -39,11 +39,11 @@ impl Token {
             end,
         }
     }
-    
+
     pub fn is_symbol(&self) -> bool {
         self.kind.is_symbol()
     }
-    
+
     pub fn is_number(&self) -> bool {
         self.kind.is_number()
     }
@@ -122,7 +122,7 @@ impl<'s> Tokenizer<'s> {
 
     fn consume_symbol(&mut self) -> Option<Token> {
         let symbol_re =
-            Regex::new(r"^\p{XID_Start}\p{XID_Continue}*|^(\p{Punctuation}|\p{Symbol})+").unwrap();
+            Regex::new(r"^\p{Open_Punctuation}|^\p{Close_Punctuation}|^\p{XID_Start}\p{XID_Continue}*|^(\p{Punctuation}|\p{Symbol})+").unwrap();
         if let Some(captures) = symbol_re.captures(self.as_text()) {
             let text: String = captures.get(0).unwrap().as_str().to_string();
             let start = self.position;
@@ -205,6 +205,31 @@ fn test_if_expression() {
             Token::new(Symbol, "{".to_string(), 11, 12),
             Token::new(Symbol, "x".to_string(), 13, 14),
             Token::new(Symbol, "}".to_string(), 15, 16)
+        ]
+    );
+}
+
+#[test]
+fn test_parens() {
+    let tokenizer = Tokenizer::new("(define ((x)) ⟨[x]⟩)", 0);
+    let tokens = tokenizer.tokenize();
+    use TokenKind::*;
+    assert_eq!(
+        tokens,
+        vec![
+            Token::new(Symbol, "(".to_string(), 0, 1),
+            Token::new(Symbol, "define".to_string(), 1, 7),
+            Token::new(Symbol, "(".to_string(), 8, 9),
+            Token::new(Symbol, "(".to_string(), 9, 10),
+            Token::new(Symbol, "x".to_string(), 10, 11),
+            Token::new(Symbol, ")".to_string(), 11, 12),
+            Token::new(Symbol, ")".to_string(), 12, 13),
+            Token::new(Symbol, "⟨".to_string(), 14, 17),
+            Token::new(Symbol, "[".to_string(), 17, 18),
+            Token::new(Symbol, "x".to_string(), 18, 19),
+            Token::new(Symbol, "]".to_string(), 19, 20),
+            Token::new(Symbol, "⟩".to_string(), 20, 23),
+            Token::new(Symbol, ")".to_string(), 23, 24)
         ]
     );
 }

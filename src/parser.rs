@@ -229,7 +229,6 @@ pub fn complete_parse(input: &str, expected: &str) {
     );
 
     let tokens = Tokenizer::new(input, 0).tokenize();
-    dbg!(&tokens);
     let mut input = Input::new(tokens);
     let expr = parse_expr(&language, &mut input, 0);
     assert!(input.peek().is_none());
