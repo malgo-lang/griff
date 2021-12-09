@@ -189,6 +189,32 @@ fn test_arith_expression() {
 }
 
 #[test]
+fn test_minus_expression() {
+    let tokenizer = Tokenizer::new("x-y", 0);
+    let tokens = tokenizer.tokenize();
+    assert_eq!(
+        tokens,
+        vec![
+            Token::new(TokenKind::Symbol, "x".to_string(), 0, 1),
+            Token::new(TokenKind::Symbol, "-".to_string(), 1, 2),
+            Token::new(TokenKind::Symbol, "y".to_string(), 2, 3),
+        ]
+    )
+}
+
+#[test]
+fn test_underline() {
+    let tokenizer = Tokenizer::new("x_y", 0);
+    let tokens = tokenizer.tokenize();
+    assert_eq!(
+        tokens,
+        vec![
+            Token::new(TokenKind::Symbol, "x_y".to_string(), 0, 3)
+        ]
+    )
+}
+
+#[test]
 fn test_if_expression() {
     let tokenizer = Tokenizer::new("if (x < y) { x }", 0);
     let tokens = tokenizer.tokenize();
