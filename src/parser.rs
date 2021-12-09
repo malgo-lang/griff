@@ -1,25 +1,31 @@
-use crate::sexpr::SExpr;
+use crate::{
+    sexpr::SExpr,
+    token::{Token, Tokenizer},
+};
 
 // https://zenn.dev/pandaman64/books/pratt-parsing
 
 #[derive(Debug)]
-pub struct Input<'s> {
-    text: &'s str,
+pub struct Input {
+    tokens: Vec<Token>,
     position: usize,
 }
 
-impl<'s> Input<'s> {
-    pub fn new(text: &'s str) -> Self {
-        Self { text, position: 0 }
+impl Input {
+    pub fn new(tokens: Vec<Token>) -> Self {
+        Self {
+            tokens,
+            position: 0,
+        }
     }
 
     // read one character
-    pub fn peek(&self) -> Option<char> {
-        self.text[self.position..].chars().next()
+    pub fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.position)
     }
 
     pub fn bump(&mut self) {
-        self.position += self.peek().unwrap().len_utf8();
+        self.position += 1;
     }
 }
 
@@ -48,13 +54,13 @@ impl FollowingOpKind {
 pub struct Operator<K> {
     kind: K,
     name: String,
-    symbols: Vec<char>,
+    symbols: Vec<String>,
 }
 
 pub type LeadingOp = Operator<LeadingOpKind>;
 pub type FollowingOp = Operator<FollowingOpKind>;
 
-pub fn prefix(name: String, symbols: Vec<char>, right_bp: u16) -> LeadingOp {
+pub fn prefix(name: String, symbols: Vec<String>, right_bp: u16) -> LeadingOp {
     LeadingOp {
         kind: LeadingOpKind::Prefix { right_bp },
         name,
@@ -62,7 +68,7 @@ pub fn prefix(name: String, symbols: Vec<char>, right_bp: u16) -> LeadingOp {
     }
 }
 
-pub fn paren(name: String, symbols: Vec<char>) -> LeadingOp {
+pub fn paren(name: String, symbols: Vec<String>) -> LeadingOp {
     LeadingOp {
         kind: LeadingOpKind::Paren,
         name,
@@ -70,7 +76,7 @@ pub fn paren(name: String, symbols: Vec<char>) -> LeadingOp {
     }
 }
 
-pub fn postfix(name: String, symbols: Vec<char>, left_bp: u16) -> FollowingOp {
+pub fn postfix(name: String, symbols: Vec<String>, left_bp: u16) -> FollowingOp {
     FollowingOp {
         kind: FollowingOpKind::Postfix { left_bp },
         name,
@@ -78,7 +84,7 @@ pub fn postfix(name: String, symbols: Vec<char>, left_bp: u16) -> FollowingOp {
     }
 }
 
-pub fn infix(name: String, symbols: Vec<char>, left_bp: u16, right_bp: u16) -> FollowingOp {
+pub fn infix(name: String, symbols: Vec<String>, left_bp: u16, right_bp: u16) -> FollowingOp {
     FollowingOp {
         kind: FollowingOpKind::Infix { left_bp, right_bp },
         name,
@@ -101,24 +107,31 @@ impl Language {
     }
 }
 
-pub fn parse_atom(input: &mut Input<'_>) -> SExpr {
+pub fn parse_atom(input: &mut Input) -> SExpr {
     match input.peek().unwrap() {
-        c if c.is_ascii_digit() => {
-            input.bump(); // consume a digit from input
-            SExpr::Atom(c.into())
+        token if token.is_symbol() => {
+            let name = token.text.clone();
+            input.bump(); // consume a symbol from input
+            SExpr::Atom(name)
         }
-        c => panic!("expected an atom, got {}", c),
+        token if token.is_number() => {
+            let number = token.text.clone();
+            input.bump(); // consume a number from input
+            SExpr::Atom(number)
+        }
+        token => panic!("expected an atom, got {:?}", token),
     }
 }
 
-pub fn parse_expr(language: &Language, input: &mut Input<'_>, min_bp: u16) -> SExpr {
+pub fn parse_expr(language: &Language, input: &mut Input, min_bp: u16) -> SExpr {
     let mut leading_expr = {
         let mut expr = None;
-        let c = input.peek().unwrap();
+        let token = input.peek().unwrap();
+        let text = token.text.clone();
 
         for leading_operator in language.leading_operators.iter() {
             // match a leading operator
-            if leading_operator.symbols[0] == c {
+            if leading_operator.symbols[0] == text {
                 input.bump();
                 let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
 
@@ -127,7 +140,7 @@ pub fn parse_expr(language: &Language, input: &mut Input<'_>, min_bp: u16) -> SE
                     let inner_expr = parse_expr(language, input, 0);
                     children.push(inner_expr);
 
-                    assert_eq!(input.peek().unwrap(), *symbol);
+                    assert_eq!(input.peek().unwrap().text, *symbol);
                     input.bump();
                 }
 
@@ -151,10 +164,10 @@ pub fn parse_expr(language: &Language, input: &mut Input<'_>, min_bp: u16) -> SE
     'main: loop {
         match input.peek() {
             None => return leading_expr,
-            Some(c) => {
+            Some(token) => {
                 for following_operator in language.following_operators.iter() {
                     // 後続演算子にマッチ
-                    if following_operator.symbols[0] == c {
+                    if following_operator.symbols[0] == token.text {
                         // 演算子の優先順位が足りない場合はやめる
                         if following_operator.kind.left_bp() <= min_bp {
                             return leading_expr;
@@ -169,7 +182,7 @@ pub fn parse_expr(language: &Language, input: &mut Input<'_>, min_bp: u16) -> SE
                             let inner_expr = parse_expr(language, input, 0);
                             children.push(inner_expr);
 
-                            assert_eq!(input.peek().unwrap(), *symbol);
+                            assert_eq!(input.peek().unwrap().text, *symbol);
                             input.bump();
                         }
 
@@ -193,24 +206,34 @@ pub fn parse_expr(language: &Language, input: &mut Input<'_>, min_bp: u16) -> SE
 pub fn complete_parse(input: &str, expected: &str) {
     let language = Language::new(
         vec![
-            prefix("-".into(), vec!['-'], 51),
-            prefix("if-then-else".into(), vec!['I', 'T', 'E'], 41),
-            paren("paren".into(), vec!['(', ')']),
+            prefix("-".into(), vec!["-".to_string()], 51),
+            prefix(
+                "if-then-else".into(),
+                vec!["if".to_string(), "then".to_string(), "else".to_string()],
+                41,
+            ),
+            paren("paren".into(), vec!["(".to_string(), ")".to_string()]),
         ],
         vec![
-            postfix("?".into(), vec!['?'], 20),
-            postfix("subscript".into(), vec!['[', ']'], 100),
-            infix("+".into(), vec!['+'], 50, 51),
-            infix("-".into(), vec!['-'], 50, 51),
-            infix("*".into(), vec!['*'], 80, 81),
-            infix("=".into(), vec!['='], 21, 20),
+            postfix("?".into(), vec!["?".to_string()], 20),
+            postfix(
+                "subscript".into(),
+                vec!["[".to_string(), "]".to_string()],
+                100,
+            ),
+            infix("+".into(), vec!["+".to_string()], 50, 51),
+            infix("-".into(), vec!["-".to_string()], 50, 51),
+            infix("*".into(), vec!["*".to_string()], 80, 81),
+            infix("=".into(), vec!["=".to_string()], 21, 20),
         ],
     );
 
-    let mut input = Input::new(input);
+    let tokens = Tokenizer::new(input, 0).tokenize();
+    dbg!(&tokens);
+    let mut input = Input::new(tokens);
     let expr = parse_expr(&language, &mut input, 0);
-    assert_eq!(expr.to_string(), expected);
     assert!(input.peek().is_none());
+    assert_eq!(expr.to_string(), expected);
 }
 
 #[test]
@@ -240,18 +263,18 @@ fn test_simple_infix() {
 
 #[test]
 fn test_infix_and_prefix() {
-    complete_parse("7+-8", "(+ 7 (- 8))");
+    complete_parse("7 + -8", "(+ 7 (- 8))");
 }
 
 #[test]
 fn test_different_position() {
-    complete_parse("1--2", "(- 1 (- 2))")
+    complete_parse("1 - -2", "(- 1 (- 2))")
 }
 
 #[test]
 fn test_complex() {
     complete_parse(
-        "1=2=I(3)T(4)E(5[6])",
-        "(= 1 (= 2 (if-then-else (paren 3) (paren 4) (paren (subscript 5 6)))))",
+        "1 = 2 = if 3 then(4) else( 5[6] )",
+        "(= 1 (= 2 (if-then-else 3 (paren 4) (paren (subscript 5 6)))))",
     )
 }

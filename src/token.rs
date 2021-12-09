@@ -39,6 +39,14 @@ impl Token {
             end,
         }
     }
+    
+    pub fn is_symbol(&self) -> bool {
+        self.kind.is_symbol()
+    }
+    
+    pub fn is_number(&self) -> bool {
+        self.kind.is_number()
+    }
 }
 
 pub struct Tokenizer<'s> {
@@ -59,7 +67,6 @@ impl<'s> Tokenizer<'s> {
                 break;
             }
             let token = self.consume_token();
-            dbg!(&token);
             tokens.push(token);
         }
         tokens
