@@ -29,13 +29,13 @@ impl Input {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum LeadingOpKind {
     Prefix { right_bp: u16 },
     Paren,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum FollowingOpKind {
     Postfix { left_bp: u16 },
     Infix { left_bp: u16, right_bp: u16 },
@@ -50,7 +50,7 @@ impl FollowingOpKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Operator<K> {
     kind: K,
     name: String,
@@ -107,99 +107,120 @@ impl Language {
     }
 }
 
-pub fn parse_atom(input: &mut Input) -> SExpr {
-    match input.peek().unwrap() {
-        token if token.is_symbol() => {
-            let name = token.text.clone();
-            input.bump(); // consume a symbol from input
-            SExpr::Atom(name)
-        }
-        token if token.is_number() => {
-            let number = token.text.clone();
-            input.bump(); // consume a number from input
-            SExpr::Atom(number)
-        }
-        token => panic!("expected an atom, got {:?}", token),
-    }
+pub struct Parser<'a> {
+    input: &'a mut Input,
+    language: Language,
 }
 
-pub fn parse_expr(language: &Language, input: &mut Input, min_bp: u16) -> SExpr {
-    let mut leading_expr = {
-        let mut expr = None;
-        let token = input.peek().unwrap();
-        let text = token.text.clone();
+impl<'a> Parser<'a> {
+    pub fn new(input: &'a mut Input, language: Language) -> Self {
+        Self { input, language }
+    }
 
-        for leading_operator in language.leading_operators.iter() {
-            // match a leading operator
-            if leading_operator.symbols[0] == text {
-                input.bump();
+    fn parse_atom(&mut self) -> SExpr {
+        match self.input.peek().unwrap() {
+            token if token.is_symbol() => {
+                let name = token.text.clone();
+                self.input.bump(); // consume a symbol from input
+                SExpr::Atom(name)
+            }
+            token if token.is_number() => {
+                let number = token.text.clone();
+                self.input.bump(); // consume a number from input
+                SExpr::Atom(number)
+            }
+            token => panic!("expected an atom, got {:?}", token),
+        }
+    }
+
+    pub fn parse_expr(&mut self, min_bp: u16) -> SExpr {
+        let mut leading_expr = {
+            let mut expr = None;
+            let token = self.input.peek().unwrap();
+            let text = &token.text;
+
+            if let Some(leading_operator) = self.peek_leading_operator(text) {
+                // match a leading operator
+                self.input.bump();
                 let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
 
                 // 記号の内側部分
                 for symbol in leading_operator.symbols[1..].iter() {
-                    let inner_expr = parse_expr(language, input, 0);
+                    let inner_expr = self.parse_expr(0);
                     children.push(inner_expr);
 
-                    assert_eq!(input.peek().unwrap().text, *symbol);
-                    input.bump();
+                    assert_eq!(self.input.peek().unwrap().text, *symbol);
+                    self.input.bump();
                 }
 
                 // prefix演算子の場合は、後ろに続く式をパース
                 if let LeadingOpKind::Prefix { right_bp } = leading_operator.kind {
-                    let following_expr = parse_expr(language, input, right_bp);
+                    let following_expr = self.parse_expr(right_bp);
                     children.push(following_expr);
                 }
 
                 expr = Some(SExpr::List(children));
             }
-        }
 
-        match expr {
-            Some(expr) => expr,
-            // マッチする先行演算子がない場合は、atomをパース
-            None => parse_atom(input),
-        }
-    };
+            match expr {
+                Some(expr) => expr,
+                // マッチする先行演算子がない場合は、atomをパース
+                None => self.parse_atom(),
+            }
+        };
 
-    'main: loop {
-        match input.peek() {
-            None => return leading_expr,
-            Some(token) => {
-                for following_operator in language.following_operators.iter() {
-                    // 後続演算子にマッチ
-                    if following_operator.symbols[0] == token.text {
-                        // 演算子の優先順位が足りない場合はやめる
-                        if following_operator.kind.left_bp() <= min_bp {
-                            return leading_expr;
-                        }
-
-                        input.bump();
-                        let mut children =
-                            vec![SExpr::Atom(following_operator.name.clone()), leading_expr];
-
-                        // 記号の内側部分
-                        for symbol in following_operator.symbols[1..].iter() {
-                            let inner_expr = parse_expr(language, input, 0);
-                            children.push(inner_expr);
-
-                            assert_eq!(input.peek().unwrap().text, *symbol);
-                            input.bump();
-                        }
-
-                        // infix演算子の場合は後ろに続く式をパース
-                        if let FollowingOpKind::Infix { right_bp, .. } = following_operator.kind {
-                            let following_expr = parse_expr(language, input, right_bp);
-                            children.push(following_expr);
-                        }
-
-                        leading_expr = SExpr::List(children);
-                        continue 'main; // 残りの後続演算子を再帰的にパース
+        loop {
+            if let Some(token) = self.input.peek() {
+                if let Some(following_operator) = self.peek_following_operator(&token.text) {
+                    // 演算子の優先順位が足りない場合はやめる
+                    if following_operator.kind.left_bp() <= min_bp {
+                        return leading_expr;
                     }
-                }
 
-                return leading_expr;
+                    self.input.bump();
+                    let mut children =
+                        vec![SExpr::Atom(following_operator.name.clone()), leading_expr];
+
+                    // 記号の内側部分
+                    for symbol in following_operator.symbols[1..].iter() {
+                        let inner_expr = self.parse_expr(0);
+                        children.push(inner_expr);
+
+                        assert_eq!(self.input.peek().unwrap().text, *symbol);
+                        self.input.bump();
+                    }
+
+                    // infix演算子の場合は後ろに続く式をパース
+                    if let FollowingOpKind::Infix { right_bp, .. } = following_operator.kind {
+                        let following_expr = self.parse_expr(right_bp);
+                        children.push(following_expr);
+                    }
+
+                    leading_expr = SExpr::List(children);
+                    continue; // 残りの後続演算子を再帰的にパース
+                }
+            }
+            break;
+        }
+        return leading_expr;
+    }
+
+    fn peek_leading_operator(&self, text: &String) -> Option<LeadingOp> {
+        for operator in self.language.leading_operators.iter() {
+            if operator.symbols[0] == *text {
+                return Some(operator.clone());
             }
         }
+        return None;
+    }
+
+    fn peek_following_operator(&self, text: &String) -> Option<FollowingOp> {
+        for operator in self.language.following_operators.iter() {
+            if operator.symbols[0] == *text {
+                return Some(operator.clone());
+            }
+        }
+        return None;
     }
 }
 
@@ -212,6 +233,11 @@ pub fn complete_parse(input: &str, expected: &str) {
                 vec!["if".to_string(), "then".to_string(), "else".to_string()],
                 41,
             ),
+            prefix(
+                "lambda".into(),
+                vec!["lambda".to_string(), ".".to_string()],
+                0,
+            ),
             paren("paren".into(), vec!["(".to_string(), ")".to_string()]),
         ],
         vec![
@@ -219,6 +245,11 @@ pub fn complete_parse(input: &str, expected: &str) {
             postfix(
                 "subscript".into(),
                 vec!["[".to_string(), "]".to_string()],
+                100,
+            ),
+            postfix(
+                "call".into(),
+                vec!["(".to_string(), ")".to_string()],
                 100,
             ),
             infix("+".into(), vec!["+".to_string()], 50, 51),
@@ -230,7 +261,10 @@ pub fn complete_parse(input: &str, expected: &str) {
 
     let tokens = Tokenizer::new(input, 0).tokenize();
     let mut input = Input::new(tokens);
-    let expr = parse_expr(&language, &mut input, 0);
+
+    let mut parser = Parser::new(&mut input, language);
+    let expr = parser.parse_expr(0);
+    dbg!(input.peek());
     assert!(input.peek().is_none());
     assert_eq!(expr.to_string(), expected);
 }
@@ -276,4 +310,14 @@ fn test_complex() {
         "1 = 2 = if 3 then(4) else( 5[6] )",
         "(= 1 (= 2 (if-then-else 3 (paren 4) (paren (subscript 5 6)))))",
     )
+}
+
+#[test]
+fn test_lambda() {
+    complete_parse("lambda x.x", "(lambda x x)")
+}
+
+#[test]
+fn test_call() {
+    complete_parse("(lambda x.x)(7)", "(call (paren (lambda x x)) 7)")
 }

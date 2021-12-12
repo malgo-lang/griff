@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SExpr {
     Atom(String),
     List(Vec<SExpr>),
