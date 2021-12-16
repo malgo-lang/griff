@@ -5,30 +5,6 @@ use crate::{
 
 // https://zenn.dev/pandaman64/books/pratt-parsing
 
-#[derive(Debug)]
-pub struct Input {
-    tokens: Vec<Token>,
-    position: usize,
-}
-
-impl Input {
-    pub fn new(tokens: Vec<Token>) -> Self {
-        Self {
-            tokens,
-            position: 0,
-        }
-    }
-
-    // read one character
-    pub fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.position)
-    }
-
-    pub fn bump(&mut self) {
-        self.position += 1;
-    }
-}
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum LeadingOpKind {
     Prefix { right_bp: u16 },
@@ -107,26 +83,40 @@ impl Language {
     }
 }
 
-pub struct Parser<'a> {
-    input: &'a mut Input,
+pub struct Parser {
+    tokens: Vec<Token>,
+    position: usize,
     language: Language,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(input: &'a mut Input, language: Language) -> Self {
-        Self { input, language }
+impl Parser {
+    pub fn new(tokens: Vec<Token>, position: usize, language: Language) -> Self {
+        Self {
+            tokens,
+            position,
+            language,
+        }
+    }
+
+    // read one character
+    fn peek(&self) -> Option<&Token> {
+        self.tokens.get(self.position)
+    }
+
+    fn consume(&mut self) {
+        self.position += 1;
     }
 
     fn parse_atom(&mut self) -> SExpr {
-        match self.input.peek().unwrap() {
+        match self.peek().unwrap() {
             token if token.is_symbol() => {
                 let name = token.text.clone();
-                self.input.bump(); // consume a symbol from input
+                self.consume(); // consume a symbol from input
                 SExpr::Atom(name)
             }
             token if token.is_number() => {
                 let number = token.text.clone();
-                self.input.bump(); // consume a number from input
+                self.consume(); // consume a number from input
                 SExpr::Atom(number)
             }
             token => panic!("expected an atom, got {:?}", token),
@@ -136,12 +126,12 @@ impl<'a> Parser<'a> {
     pub fn parse_expr(&mut self, min_bp: u16) -> SExpr {
         let mut leading_expr = {
             let mut expr = None;
-            let token = self.input.peek().unwrap();
+            let token = self.peek().unwrap();
             let text = &token.text;
 
             if let Some(leading_operator) = self.peek_leading_operator(text) {
                 // match a leading operator
-                self.input.bump();
+                self.consume();
                 let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
 
                 // 記号の内側部分
@@ -149,8 +139,8 @@ impl<'a> Parser<'a> {
                     let inner_expr = self.parse_expr(0);
                     children.push(inner_expr);
 
-                    assert_eq!(self.input.peek().unwrap().text, *symbol);
-                    self.input.bump();
+                    assert_eq!(self.peek().unwrap().text, *symbol);
+                    self.consume();
                 }
 
                 // prefix演算子の場合は、後ろに続く式をパース
@@ -170,14 +160,14 @@ impl<'a> Parser<'a> {
         };
 
         loop {
-            if let Some(token) = self.input.peek() {
+            if let Some(token) = self.peek() {
                 if let Some(following_operator) = self.peek_following_operator(&token.text) {
                     // 演算子の優先順位が足りない場合はやめる
                     if following_operator.kind.left_bp() <= min_bp {
                         return leading_expr;
                     }
 
-                    self.input.bump();
+                    self.consume();
                     let mut children =
                         vec![SExpr::Atom(following_operator.name.clone()), leading_expr];
 
@@ -186,8 +176,8 @@ impl<'a> Parser<'a> {
                         let inner_expr = self.parse_expr(0);
                         children.push(inner_expr);
 
-                        assert_eq!(self.input.peek().unwrap().text, *symbol);
-                        self.input.bump();
+                        assert_eq!(self.peek().unwrap().text, *symbol);
+                        self.consume();
                     }
 
                     // infix演算子の場合は後ろに続く式をパース
@@ -247,11 +237,7 @@ pub fn complete_parse(input: &str, expected: &str) {
                 vec!["[".to_string(), "]".to_string()],
                 100,
             ),
-            postfix(
-                "call".into(),
-                vec!["(".to_string(), ")".to_string()],
-                100,
-            ),
+            postfix("call".into(), vec!["(".to_string(), ")".to_string()], 100),
             infix("+".into(), vec!["+".to_string()], 50, 51),
             infix("-".into(), vec!["-".to_string()], 50, 51),
             infix("*".into(), vec!["*".to_string()], 80, 81),
@@ -260,12 +246,9 @@ pub fn complete_parse(input: &str, expected: &str) {
     );
 
     let tokens = Tokenizer::new(input, 0).tokenize();
-    let mut input = Input::new(tokens);
 
-    let mut parser = Parser::new(&mut input, language);
+    let mut parser = Parser::new(tokens, 0, language);
     let expr = parser.parse_expr(0);
-    dbg!(input.peek());
-    assert!(input.peek().is_none());
     assert_eq!(expr.to_string(), expected);
 }
 
