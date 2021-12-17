@@ -27,44 +27,50 @@ impl FollowingOpKind {
 }
 
 #[derive(Debug, Clone)]
+pub enum Part {
+    Symbol { name: String },
+    Expr,
+}
+
+#[derive(Debug, Clone)]
 pub struct Operator<K> {
     kind: K,
     name: String,
-    symbols: Vec<String>,
+    parts: Vec<Part>,
 }
 
 pub type LeadingOp = Operator<LeadingOpKind>;
 pub type FollowingOp = Operator<FollowingOpKind>;
 
-pub fn prefix(name: String, symbols: Vec<String>, right_bp: u16) -> LeadingOp {
+pub fn prefix(name: String, parts: Vec<Part>, right_bp: u16) -> LeadingOp {
     LeadingOp {
         kind: LeadingOpKind::Prefix { right_bp },
         name,
-        symbols,
+        parts,
     }
 }
 
-pub fn paren(name: String, symbols: Vec<String>) -> LeadingOp {
+pub fn paren(name: String, parts: Vec<Part>) -> LeadingOp {
     LeadingOp {
         kind: LeadingOpKind::Paren,
         name,
-        symbols,
+        parts,
     }
 }
 
-pub fn postfix(name: String, symbols: Vec<String>, left_bp: u16) -> FollowingOp {
+pub fn postfix(name: String, parts: Vec<Part>, left_bp: u16) -> FollowingOp {
     FollowingOp {
         kind: FollowingOpKind::Postfix { left_bp },
         name,
-        symbols,
+        parts,
     }
 }
 
-pub fn infix(name: String, symbols: Vec<String>, left_bp: u16, right_bp: u16) -> FollowingOp {
+pub fn infix(name: String, parts: Vec<Part>, left_bp: u16, right_bp: u16) -> FollowingOp {
     FollowingOp {
         kind: FollowingOpKind::Infix { left_bp, right_bp },
         name,
-        symbols,
+        parts,
     }
 }
 
@@ -135,12 +141,16 @@ impl Parser {
                 let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
 
                 // 記号の内側部分
-                for symbol in leading_operator.symbols[1..].iter() {
-                    let inner_expr = self.parse_expr(0);
-                    children.push(inner_expr);
-
-                    assert_eq!(self.peek().unwrap().text, *symbol);
-                    self.consume();
+                for part in leading_operator.parts[1..].iter() {
+                    match part {
+                        Part::Expr => {
+                            children.push(self.parse_expr(0));
+                        }
+                        Part::Symbol { name } => {
+                            assert_eq!(self.peek().unwrap().text, *name);
+                            self.consume();
+                        }
+                    }
                 }
 
                 // prefix演算子の場合は、後ろに続く式をパース
@@ -172,12 +182,16 @@ impl Parser {
                         vec![SExpr::Atom(following_operator.name.clone()), leading_expr];
 
                     // 記号の内側部分
-                    for symbol in following_operator.symbols[1..].iter() {
-                        let inner_expr = self.parse_expr(0);
-                        children.push(inner_expr);
-
-                        assert_eq!(self.peek().unwrap().text, *symbol);
-                        self.consume();
+                    for part in following_operator.parts[1..].iter() {
+                        match part {
+                            Part::Expr => {
+                                children.push(self.parse_expr(0));
+                            }
+                            Part::Symbol { name } => {
+                                assert_eq!(self.peek().unwrap().text, *name);
+                                self.consume();
+                            }
+                        }
                     }
 
                     // infix演算子の場合は後ろに続く式をパース
@@ -197,8 +211,13 @@ impl Parser {
 
     fn peek_leading_operator(&self, text: &String) -> Option<LeadingOp> {
         for operator in self.language.leading_operators.iter() {
-            if operator.symbols[0] == *text {
-                return Some(operator.clone());
+            match &operator.parts[0] {
+                Part::Symbol { name } => {
+                    if *name == *text {
+                        return Some(operator.clone());
+                    }
+                }
+                _ => {}
             }
         }
         return None;
@@ -206,8 +225,13 @@ impl Parser {
 
     fn peek_following_operator(&self, text: &String) -> Option<FollowingOp> {
         for operator in self.language.following_operators.iter() {
-            if operator.symbols[0] == *text {
-                return Some(operator.clone());
+            match &operator.parts[0] {
+                Part::Symbol { name } => {
+                    if *name == *text {
+                        return Some(operator.clone());
+                    }
+                }
+                _ => {}
             }
         }
         return None;
@@ -215,33 +239,147 @@ impl Parser {
 }
 
 pub fn complete_parse(input: &str, expected: &str) {
+    use Part::*;
     let language = Language::new(
         vec![
-            prefix("-".into(), vec!["-".to_string()], 51),
+            prefix(
+                "-".into(),
+                vec![Symbol {
+                    name: "-".to_string(),
+                }],
+                51,
+            ),
             prefix(
                 "if-then-else".into(),
-                vec!["if".to_string(), "then".to_string(), "else".to_string()],
+                vec![
+                    Symbol {
+                        name: "if".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: "then".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: "else".to_string(),
+                    },
+                ],
                 41,
             ),
             prefix(
                 "lambda".into(),
-                vec!["lambda".to_string(), ".".to_string()],
+                vec![
+                    Symbol {
+                        name: "lambda".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: ".".to_string(),
+                    },
+                ],
                 0,
             ),
-            paren("paren".into(), vec!["(".to_string(), ")".to_string()]),
+            paren(
+                "fn".into(),
+                vec![
+                    Symbol {
+                        name: "fn".to_string(),
+                    },
+                    Symbol {
+                        name: "(".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: ")".to_string(),
+                    },
+                    Symbol {
+                        name: "{".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: "}".to_string(),
+                    },
+                ],
+            ),
+            paren(
+                "paren".into(),
+                vec![
+                    Symbol {
+                        name: "(".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: ")".to_string(),
+                    },
+                ],
+            ),
         ],
         vec![
-            postfix("?".into(), vec!["?".to_string()], 20),
+            postfix(
+                "?".into(),
+                vec![Symbol {
+                    name: "?".to_string(),
+                }],
+                20,
+            ),
             postfix(
                 "subscript".into(),
-                vec!["[".to_string(), "]".to_string()],
+                vec![
+                    Symbol {
+                        name: "[".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: "]".to_string(),
+                    },
+                ],
                 100,
             ),
-            postfix("call".into(), vec!["(".to_string(), ")".to_string()], 100),
-            infix("+".into(), vec!["+".to_string()], 50, 51),
-            infix("-".into(), vec!["-".to_string()], 50, 51),
-            infix("*".into(), vec!["*".to_string()], 80, 81),
-            infix("=".into(), vec!["=".to_string()], 21, 20),
+            postfix(
+                "call".into(),
+                vec![
+                    Symbol {
+                        name: "(".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: ")".to_string(),
+                    },
+                ],
+                100,
+            ),
+            infix(
+                "+".into(),
+                vec![Symbol {
+                    name: "+".to_string(),
+                }],
+                50,
+                51,
+            ),
+            infix(
+                "-".into(),
+                vec![Symbol {
+                    name: "-".to_string(),
+                }],
+                50,
+                51,
+            ),
+            infix(
+                "*".into(),
+                vec![Symbol {
+                    name: "*".to_string(),
+                }],
+                80,
+                81,
+            ),
+            infix(
+                "=".into(),
+                vec![Symbol {
+                    name: "=".to_string(),
+                }],
+                21,
+                20,
+            ),
         ],
     );
 
@@ -303,4 +441,28 @@ fn test_lambda() {
 #[test]
 fn test_call() {
     complete_parse("(lambda x.x)(7)", "(call (paren (lambda x x)) 7)")
+}
+
+#[test]
+fn test_fn() {
+    complete_parse(
+        "fn(x){x}",
+        "(fn x x)",
+    )
+}
+
+#[test]
+fn test_complex_fn() {
+    complete_parse(
+        "fn (x) { x - 7 }",
+        "(fn x (- x 7))",
+    )
+}
+
+#[test]
+fn test_call_fn() {
+    complete_parse(
+        "fn(x){x}(7)",
+        "(call (fn x x) 7)",
+    )
 }
