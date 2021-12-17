@@ -335,6 +335,28 @@ pub fn complete_parse(input: &str, expected: &str) {
                 ],
                 100,
             ),
+            /* バックトラックが必要？
+            postfix(
+                "call-block".into(),
+                vec![
+                    Symbol {
+                        name: "(".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: ")".to_string(),
+                    },
+                    Symbol{
+                        name: "{".to_string(),
+                    },
+                    Expr,
+                    Symbol {
+                        name: "}".to_string(),
+                    },
+                ],
+                100,
+            ),
+            */
             postfix(
                 "call".into(),
                 vec![
@@ -445,24 +467,25 @@ fn test_call() {
 
 #[test]
 fn test_fn() {
-    complete_parse(
-        "fn(x){x}",
-        "(fn x x)",
-    )
+    complete_parse("fn(x){x}", "(fn x x)")
 }
 
 #[test]
 fn test_complex_fn() {
-    complete_parse(
-        "fn (x) { x - 7 }",
-        "(fn x (- x 7))",
-    )
+    complete_parse("fn (x) { x - 7 }", "(fn x (- x 7))")
 }
 
 #[test]
 fn test_call_fn() {
+    complete_parse("fn(x){x}(7)", "(call (fn x x) 7)")
+}
+
+/*
+#[test]
+fn test_call_block_fn() {
     complete_parse(
-        "fn(x){x}(7)",
-        "(call (fn x x) 7)",
+        "(fn(x){x})(y){7}",
+        "(call-block (paren (fn x x)) y 7)",
     )
 }
+*/
