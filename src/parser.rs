@@ -113,6 +113,7 @@ impl Parser {
         self.position += 1;
     }
 
+    // Parse a S-expression
     fn parse_atom(&mut self) -> SExpr {
         match self.peek().unwrap() {
             token if token.is_symbol() => {
@@ -135,7 +136,9 @@ impl Parser {
             let token = self.peek().unwrap();
             let text = &token.text;
 
-            if let Some(leading_operator) = self.peek_leading_operator(text) {
+            let start_position = self.position;
+
+            'leading: for leading_operator in self.peek_leading_operators(text) {
                 // match a leading operator
                 self.consume();
                 let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
@@ -146,10 +149,15 @@ impl Parser {
                         Part::Expr => {
                             children.push(self.parse_expr(0));
                         }
-                        Part::Symbol { name } => {
-                            assert_eq!(self.peek().unwrap().text, *name);
-                            self.consume();
-                        }
+                        Part::Symbol { name } => match self.peek() {
+                            Some(token) if token.text == *name => {
+                                self.consume();
+                            }
+                            _ => {
+                                self.position = start_position;
+                                continue 'leading;
+                            }
+                        },
                     }
                 }
 
@@ -160,6 +168,7 @@ impl Parser {
                 }
 
                 expr = Some(SExpr::List(children));
+                break;
             }
 
             match expr {
@@ -169,17 +178,20 @@ impl Parser {
             }
         };
 
-        loop {
+        'outer: loop {
             if let Some(token) = self.peek() {
-                if let Some(following_operator) = self.peek_following_operator(&token.text) {
-                    // 演算子の優先順位が足りない場合はやめる
+                let start_position = self.position;
+                'inner: for following_operator in self.peek_following_operators(&token.text) {
+                    // If the precedence of the following operator is greater than the minimum, skip this operator.
                     if following_operator.kind.left_bp() <= min_bp {
-                        return leading_expr;
+                        continue 'inner;
                     }
 
                     self.consume();
-                    let mut children =
-                        vec![SExpr::Atom(following_operator.name.clone()), leading_expr];
+                    let mut children = vec![
+                        SExpr::Atom(following_operator.name.clone()),
+                        leading_expr.clone(),
+                    ];
 
                     // 記号の内側部分
                     for part in following_operator.parts[1..].iter() {
@@ -188,20 +200,28 @@ impl Parser {
                                 children.push(self.parse_expr(0));
                             }
                             Part::Symbol { name } => {
-                                assert_eq!(self.peek().unwrap().text, *name);
-                                self.consume();
+                                match self.peek() {
+                                    Some(token) if token.text == *name => {
+                                        self.consume();
+                                    }
+                                    _ => {
+                                        // backtracking
+                                        self.position = start_position;
+                                        continue 'inner;
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // infix演算子の場合は後ろに続く式をパース
+                    // If the following operator is a infix operator, parse the following expression.
                     if let FollowingOpKind::Infix { right_bp, .. } = following_operator.kind {
                         let following_expr = self.parse_expr(right_bp);
                         children.push(following_expr);
                     }
 
                     leading_expr = SExpr::List(children);
-                    continue; // 残りの後続演算子を再帰的にパース
+                    continue 'outer; // continue to the next following operator
                 }
             }
             break;
@@ -209,32 +229,35 @@ impl Parser {
         return leading_expr;
     }
 
-    fn peek_leading_operator(&self, text: &String) -> Option<LeadingOp> {
+    // Return all leading operators start from 'text'
+    fn peek_leading_operators(&self, text: &String) -> Vec<LeadingOp> {
+        let mut operators = vec![];
         for operator in self.language.leading_operators.iter() {
             match &operator.parts[0] {
                 Part::Symbol { name } => {
                     if *name == *text {
-                        return Some(operator.clone());
+                        operators.push(operator.clone());
                     }
                 }
                 _ => {}
             }
         }
-        return None;
+        return operators;
     }
 
-    fn peek_following_operator(&self, text: &String) -> Option<FollowingOp> {
+    fn peek_following_operators(&self, text: &String) -> Vec<FollowingOp> {
+        let mut operators = vec![];
         for operator in self.language.following_operators.iter() {
             match &operator.parts[0] {
                 Part::Symbol { name } => {
                     if *name == *text {
-                        return Some(operator.clone());
+                        operators.push(operator.clone());
                     }
                 }
                 _ => {}
             }
         }
-        return None;
+        return operators;
     }
 }
 
@@ -335,7 +358,7 @@ pub fn complete_parse(input: &str, expected: &str) {
                 ],
                 100,
             ),
-            /* バックトラックが必要？
+            // バックトラックが必要？
             postfix(
                 "call-block".into(),
                 vec![
@@ -346,7 +369,7 @@ pub fn complete_parse(input: &str, expected: &str) {
                     Symbol {
                         name: ")".to_string(),
                     },
-                    Symbol{
+                    Symbol {
                         name: "{".to_string(),
                     },
                     Expr,
@@ -356,7 +379,6 @@ pub fn complete_parse(input: &str, expected: &str) {
                 ],
                 100,
             ),
-            */
             postfix(
                 "call".into(),
                 vec![
@@ -480,7 +502,6 @@ fn test_call_fn() {
     complete_parse("fn(x){x}(7)", "(call (fn x x) 7)")
 }
 
-/*
 #[test]
 fn test_call_block_fn() {
     complete_parse(
@@ -488,4 +509,3 @@ fn test_call_block_fn() {
         "(call-block (paren (fn x x)) y 7)",
     )
 }
-*/
