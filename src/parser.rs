@@ -138,36 +138,18 @@ impl Parser {
 
             let start_position = self.position;
 
-            'leading: for leading_operator in self.peek_leading_operators(text) {
+            for leading_operator in self.peek_leading_operators(text) {
                 // match a leading operator
                 self.consume();
-                let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
-
-                // 記号の内側部分
-                for part in leading_operator.parts[1..].iter() {
-                    match part {
-                        Part::Expr => {
-                            children.push(self.parse_expr(0));
-                        }
-                        Part::Symbol(name) => match self.peek() {
-                            Some(token) if token.text == *name => {
-                                self.consume();
-                            }
-                            _ => {
-                                self.position = start_position;
-                                continue 'leading;
-                            }
-                        },
+                match self.parse_leading_operator(leading_operator) {
+                    Some(e) => {
+                        expr = Some(e);
+                    }
+                    None => {
+                        self.position = start_position;
+                        continue;
                     }
                 }
-
-                // prefix演算子の場合は、後ろに続く式をパース
-                if let LeadingOpKind::Prefix { right_bp } = leading_operator.kind {
-                    let following_expr = self.parse_expr(right_bp);
-                    children.push(following_expr);
-                }
-
-                expr = Some(SExpr::List(children));
                 break;
             }
 
@@ -178,86 +160,116 @@ impl Parser {
             }
         };
 
-        'outer: loop {
+        'following: loop {
             if let Some(token) = self.peek() {
                 let start_position = self.position;
-                'inner: for following_operator in self.peek_following_operators(&token.text) {
+                for following_operator in self.peek_following_operators(&token.text) {
                     // If the precedence of the following operator is greater than the minimum, skip this operator.
                     if following_operator.kind.left_bp() <= min_bp {
-                        continue 'inner;
+                        continue ;
                     }
 
                     self.consume();
-                    let mut children = vec![
-                        SExpr::Atom(following_operator.name.clone()),
-                        leading_expr.clone(),
-                    ];
-
-                    // 記号の内側部分
-                    for part in following_operator.parts[1..].iter() {
-                        match part {
-                            Part::Expr => {
-                                children.push(self.parse_expr(0));
-                            }
-                            Part::Symbol(name) => {
-                                match self.peek() {
-                                    Some(token) if token.text == *name => {
-                                        self.consume();
-                                    }
-                                    _ => {
-                                        // backtracking
-                                        self.position = start_position;
-                                        continue 'inner;
-                                    }
-                                }
-                            }
+                    match self.parse_following_operator(following_operator, leading_expr.clone()) {
+                        Some(e) => {
+                            leading_expr = e;
+                            continue 'following;// continue to the next following operator
+                        }
+                        None => {
+                            self.position = start_position;
+                            continue;
                         }
                     }
-
-                    // If the following operator is a infix operator, parse the following expression.
-                    if let FollowingOpKind::Infix { right_bp, .. } = following_operator.kind {
-                        let following_expr = self.parse_expr(right_bp);
-                        children.push(following_expr);
-                    }
-
-                    leading_expr = SExpr::List(children);
-                    continue 'outer; // continue to the next following operator
                 }
             }
-            break;
+            return leading_expr;
         }
-        return leading_expr;
     }
 
     // Return all leading operators start from 'text'
-    fn peek_leading_operators(&self, text: &String) -> Vec<LeadingOp> {
+    fn peek_leading_operators(&self, text: &str) -> Vec<LeadingOp> {
         let mut operators = vec![];
         for operator in self.language.leading_operators.iter() {
-            match &operator.parts[0] {
-                Part::Symbol(name) => {
-                    if *name == *text {
-                        operators.push(operator.clone());
-                    }
+            if let Part::Symbol(name) = operator.parts[0] {
+                if name == text {
+                    operators.push(operator.clone());
                 }
-                _ => {}
             }
         }
-        return operators;
+        operators
     }
 
-    fn peek_following_operators(&self, text: &String) -> Vec<FollowingOp> {
+    fn peek_following_operators(&self, text: &str) -> Vec<FollowingOp> {
         let mut operators = vec![];
         for operator in self.language.following_operators.iter() {
-            match &operator.parts[0] {
-                Part::Symbol(name) => {
-                    if *name == *text {
-                        operators.push(operator.clone());
-                    }
+            if let Part::Symbol(name) = operator.parts[0] {
+                if name == text {
+                    operators.push(operator.clone());
                 }
-                _ => {}
             }
         }
-        return operators;
+        operators
+    }
+    
+    fn parse_leading_operator(&mut self, leading_operator: LeadingOp) -> Option<SExpr> {
+        let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
+
+        // 記号の内側部分
+        for part in leading_operator.parts[1..].iter() {
+            match part {
+                Part::Expr => {
+                    children.push(self.parse_expr(0));
+                }
+                Part::Symbol(name) => match self.peek() {
+                    Some(token) if token.text == *name => {
+                        self.consume();
+                    }
+                    _ => {
+                        return None;
+                    }
+                },
+            }
+        }
+
+        // prefix演算子の場合は、後ろに続く式をパース
+        if let LeadingOpKind::Prefix { right_bp } = leading_operator.kind {
+            let following_expr = self.parse_expr(right_bp);
+            children.push(following_expr);
+        }
+
+        Some(SExpr::List(children))
+    }
+    
+    fn parse_following_operator(&mut self, following_operator: FollowingOp, leading_expr: SExpr) -> Option<SExpr> {
+        let mut children = vec![
+            SExpr::Atom(following_operator.name.clone()),
+            leading_expr,
+        ];
+
+        // 記号の内側部分
+        for part in following_operator.parts[1..].iter() {
+            match part {
+                Part::Expr => {
+                    children.push(self.parse_expr(0));
+                }
+                Part::Symbol(name) => match self.peek() {
+                    Some(token) if token.text == *name => {
+                        self.consume();
+                    }
+                    _ => {
+                        return None;
+                    }
+                },
+            }
+        }
+
+        // If the following operator is a infix operator, parse the following expression.
+        if let FollowingOpKind::Infix { right_bp, .. } = following_operator.kind {
+            let following_expr = self.parse_expr(right_bp);
+            children.push(following_expr);
+        }
+
+        Some(SExpr::List(children))
     }
 }
 

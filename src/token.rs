@@ -130,7 +130,7 @@ impl<'s> Tokenizer<'s> {
             self.position = end;
             return Some(Token::new(TokenKind::Symbol, text, start, end));
         }
-        return None;
+        None
     }
 
     fn consume_number(&mut self) -> Option<Token> {
@@ -142,7 +142,7 @@ impl<'s> Tokenizer<'s> {
             self.position = end;
             return Some(Token::new(TokenKind::Number, text, start, end));
         }
-        return None;
+        None
     }
 }
 
