@@ -29,6 +29,7 @@ impl FollowingOpKind {
 #[derive(Debug, Clone)]
 pub enum Part {
     Symbol(&'static str),
+    Atom,
     Expr,
 }
 
@@ -173,7 +174,7 @@ impl Parser {
                     match self.parse_following_operator(following_operator, leading_expr.clone()) {
                         Some(e) => {
                             leading_expr = e;
-                            continue 'following;// continue to the next following operator
+                            continue 'following; // continue to the next following operator
                         }
                         None => {
                             self.position = start_position;
@@ -217,6 +218,9 @@ impl Parser {
         // 記号の内側部分
         for part in leading_operator.parts[1..].iter() {
             match part {
+                Part::Atom => {
+                    children.push(self.parse_atom());
+                }
                 Part::Expr => {
                     children.push(self.parse_expr(0));
                 }
@@ -249,6 +253,9 @@ impl Parser {
         // 記号の内側部分
         for part in following_operator.parts[1..].iter() {
             match part {
+                Part::Atom => {
+                    children.push(self.parse_atom());
+                }
                 Part::Expr => {
                     children.push(self.parse_expr(0));
                 }
@@ -288,7 +295,7 @@ pub fn complete_parse(input: &str, expected: &str) {
             // prefix lambda <expr> . ... 0
             prefix(
                 "lambda".into(),
-                vec![Symbol("lambda"), Expr, Symbol(".")],
+                vec![Symbol("lambda"), Atom, Symbol(".")],
                 0,
             ),
             // paren fn ( <expr> ) { <expr> }
@@ -339,7 +346,10 @@ pub fn complete_parse(input: &str, expected: &str) {
             // infix ... * ... 80 81
             infix("*".into(), vec![Symbol("*")], 80, 81),
             // infix ... = ... 21 20
-            infix("=".into(), vec![Symbol("=")], 21, 20),
+            infix("=".into(), vec![Symbol("=")], 20, 20),
+            // infix ... , ... 1 2
+            // 0, 1 don't work.
+            infix(",".into(), vec![Symbol(",")], 2, 1),
         ],
     );
 
@@ -351,74 +361,61 @@ pub fn complete_parse(input: &str, expected: &str) {
 }
 
 #[test]
-fn test_parse_atom() {
-    complete_parse("7", "7");
+/** simple arithmetic expression */
+fn test_simple_arithmetic_expression() {
+    // 1 -> 1
+    complete_parse("1", "1");
+    // -1 -> (- 1)
+    complete_parse("-1", "(- 1)");
+    // 1 + 2 -> (+ 1 2)
+    complete_parse("1 + 2", "(+ 1 2)");
+    // 1 + 2 * 3 -> (+ 1 (* 2 3))
+    complete_parse("1 + 2 * 3", "(+ 1 (* 2 3))");
+    // 1 + 2 * 3 - 4 -> (- (+ 1 (* 2 3)) 4)
+    complete_parse("1 + 2 * 3 - 4", "(- (+ 1 (* 2 3)) 4)");
+    // 1 + -2 -> (+ 1 (- 2))
+    complete_parse("1 + -2", "(+ 1 (- 2))");
+    // 1 - -2 -> (- 1 (- 2))
+    complete_parse("1 - -2", "(- 1 (- 2))");
 }
 
 #[test]
-fn test_simple_prefix() {
-    complete_parse("-7", "(- 7)");
+/** simple expression included other operators, e.g. paren, call, call-block, ... */
+fn test_simple_other_expression() {
+    // 1 = 1 -> (= 1 1)
+    complete_parse("1 = 1", "(= 1 1)");
+    // 1 = 1 + 2 -> (= 1 (+ 1 2))
+    complete_parse("1 = 1 + 2", "(= 1 (+ 1 2))");
+    // 2 * 3 = 1 + 2 -> (= (* 2 3) (+ 1 2))
+    complete_parse("2 * 3 = 1 + 2", "(= (* 2 3) (+ 1 2))");
+    // 1 = 1 = 1 -> (= (= 1 1) 1) 
+    complete_parse("1 = 1 = 1", "(= 1 (= 1 1))");
+    // (- 1) -> (paren (- 1))
+    complete_parse("(- 1)", "(paren (- 1))");
+    // 1 ? -> (? 1)
+    complete_parse("1 ?", "(? 1)");
+    // lambda x.x -> (lambda x x)
+    complete_parse("lambda x.x", "(lambda x x)");
+    // (lambda x.x)(1) -> (call (paren (lambda x x)) 1) 
+    complete_parse("(lambda x.x)(1)", "(call (paren (lambda x x)) 1)");
+    // fn(x){x}(1) -> (call (fn x x) 1)
+    complete_parse("fn(x){x}(1)", "(call (fn x x) 1)");
+    // map(list){ it * 2 } -> (call-block map list (* it 2))
+    complete_parse("map(list){ it * 2 }", "(call-block map list (* it 2))");
+    // array[index] -> (subscript array index)
+    complete_parse("array[index]", "(subscript array index)");
 }
 
 #[test]
-fn test_paren() {
-    complete_parse("(-7)", "(paren (- 7))");
-}
-
-#[test]
-fn test_simple_postfix() {
-    complete_parse("7?", "(? 7)");
-}
-
-#[test]
-fn test_simple_infix() {
-    complete_parse("7+8", "(+ 7 8)");
-}
-
-#[test]
-fn test_infix_and_prefix() {
-    complete_parse("7 + -8", "(+ 7 (- 8))");
-}
-
-#[test]
-fn test_different_position() {
-    complete_parse("1 - -2", "(- 1 (- 2))")
-}
-
-#[test]
-fn test_complex() {
-    complete_parse(
-        "1 = 2 = if 3 then(4) else( 5[6] )",
-        "(= 1 (= 2 (if-then-else 3 (paren 4) (paren (subscript 5 6)))))",
-    )
-}
-
-#[test]
-fn test_lambda() {
-    complete_parse("lambda x.x", "(lambda x x)")
-}
-
-#[test]
-fn test_call() {
-    complete_parse("(lambda x.x)(7)", "(call (paren (lambda x x)) 7)")
-}
-
-#[test]
-fn test_fn() {
-    complete_parse("fn(x){x}", "(fn x x)")
-}
-
-#[test]
-fn test_complex_fn() {
-    complete_parse("fn (x) { x - 7 }", "(fn x (- x 7))")
-}
-
-#[test]
-fn test_call_fn() {
-    complete_parse("fn(x){x}(7)", "(call (fn x x) 7)")
-}
-
-#[test]
-fn test_call_block_fn() {
-    complete_parse("(fn(x){x})(y){7}", "(call-block (paren (fn x x)) y 7)")
+// Test parsing of expressions with `,`
+fn test_comma_list() {
+    // 1, 2 -> (, 1 2)
+    complete_parse("1, 2", "(, 1 2)");
+    // 1, 2, 3 -> (, 1 (, 2 3))
+    complete_parse("1, 2, 3", "(, 1 (, 2 3))");
+    
+    // fn(x, y){x + y} -> (fn (, x y) (+ x y))
+    complete_parse("fn(x, y){x + y}", "(fn (, x y) (+ x y))");
+    // fn(x, y, z){x + y + z} -> (fn (, x (, y z)) (+ (+ x y) z))
+    complete_parse("fn(x, y, z){x + y + z}", "(fn (, x (, y z)) (+ (+ x y) z))");
 }
