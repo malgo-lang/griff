@@ -28,7 +28,7 @@ impl FollowingOpKind {
 
 #[derive(Debug, Clone)]
 pub enum Part {
-    Symbol { name: String },
+    Symbol(&'static str),
     Expr,
 }
 
@@ -149,7 +149,7 @@ impl Parser {
                         Part::Expr => {
                             children.push(self.parse_expr(0));
                         }
-                        Part::Symbol { name } => match self.peek() {
+                        Part::Symbol(name) => match self.peek() {
                             Some(token) if token.text == *name => {
                                 self.consume();
                             }
@@ -199,7 +199,7 @@ impl Parser {
                             Part::Expr => {
                                 children.push(self.parse_expr(0));
                             }
-                            Part::Symbol { name } => {
+                            Part::Symbol(name) => {
                                 match self.peek() {
                                     Some(token) if token.text == *name => {
                                         self.consume();
@@ -234,7 +234,7 @@ impl Parser {
         let mut operators = vec![];
         for operator in self.language.leading_operators.iter() {
             match &operator.parts[0] {
-                Part::Symbol { name } => {
+                Part::Symbol(name) => {
                     if *name == *text {
                         operators.push(operator.clone());
                     }
@@ -249,7 +249,7 @@ impl Parser {
         let mut operators = vec![];
         for operator in self.language.following_operators.iter() {
             match &operator.parts[0] {
-                Part::Symbol { name } => {
+                Part::Symbol(name) => {
                     if *name == *text {
                         operators.push(operator.clone());
                     }
@@ -265,165 +265,69 @@ pub fn complete_parse(input: &str, expected: &str) {
     use Part::*;
     let language = Language::new(
         vec![
-            prefix(
-                "-".into(),
-                vec![Symbol {
-                    name: "-".to_string(),
-                }],
-                51,
-            ),
+            // prefix - ... 51
+            prefix("-".into(), vec![Symbol("-")], 51),
+            // prefix if <expr> then <expr> else ... 41
             prefix(
                 "if-then-else".into(),
-                vec![
-                    Symbol {
-                        name: "if".to_string(),
-                    },
-                    Expr,
-                    Symbol {
-                        name: "then".to_string(),
-                    },
-                    Expr,
-                    Symbol {
-                        name: "else".to_string(),
-                    },
-                ],
+                vec![Symbol("if"), Expr, Symbol("then"), Expr, Symbol("else")],
                 41,
             ),
+            // prefix lambda <expr> . ... 0
             prefix(
                 "lambda".into(),
-                vec![
-                    Symbol {
-                        name: "lambda".to_string(),
-                    },
-                    Expr,
-                    Symbol {
-                        name: ".".to_string(),
-                    },
-                ],
+                vec![Symbol("lambda"), Expr, Symbol(".")],
                 0,
             ),
+            // paren fn ( <expr> ) { <expr> }
             paren(
                 "fn".into(),
                 vec![
-                    Symbol {
-                        name: "fn".to_string(),
-                    },
-                    Symbol {
-                        name: "(".to_string(),
-                    },
+                    Symbol("fn"),
+                    Symbol("("),
                     Expr,
-                    Symbol {
-                        name: ")".to_string(),
-                    },
-                    Symbol {
-                        name: "{".to_string(),
-                    },
+                    Symbol(")"),
+                    Symbol("{"),
                     Expr,
-                    Symbol {
-                        name: "}".to_string(),
-                    },
+                    Symbol("}"),
                 ],
             ),
-            paren(
-                "paren".into(),
-                vec![
-                    Symbol {
-                        name: "(".to_string(),
-                    },
-                    Expr,
-                    Symbol {
-                        name: ")".to_string(),
-                    },
-                ],
-            ),
+            // paren ( <expr> )
+            paren("paren".into(), vec![Symbol("("), Expr, Symbol(")")]),
         ],
         vec![
-            postfix(
-                "?".into(),
-                vec![Symbol {
-                    name: "?".to_string(),
-                }],
-                20,
-            ),
+            // postfix ... ? 20
+            postfix("?".into(), vec![Symbol("?")], 20),
+            // postfix ... [ <expr> ] 100
             postfix(
                 "subscript".into(),
-                vec![
-                    Symbol {
-                        name: "[".to_string(),
-                    },
-                    Expr,
-                    Symbol {
-                        name: "]".to_string(),
-                    },
-                ],
+                vec![Symbol("["), Expr, Symbol("]")],
                 100,
             ),
-            // バックトラックが必要？
+            // バックトラックが必要
+            // postfix ... ( <expr> ) { <expr> } 100
             postfix(
                 "call-block".into(),
                 vec![
-                    Symbol {
-                        name: "(".to_string(),
-                    },
+                    Symbol("("),
                     Expr,
-                    Symbol {
-                        name: ")".to_string(),
-                    },
-                    Symbol {
-                        name: "{".to_string(),
-                    },
+                    Symbol(")"),
+                    Symbol("{"),
                     Expr,
-                    Symbol {
-                        name: "}".to_string(),
-                    },
+                    Symbol("}"),
                 ],
                 100,
             ),
-            postfix(
-                "call".into(),
-                vec![
-                    Symbol {
-                        name: "(".to_string(),
-                    },
-                    Expr,
-                    Symbol {
-                        name: ")".to_string(),
-                    },
-                ],
-                100,
-            ),
-            infix(
-                "+".into(),
-                vec![Symbol {
-                    name: "+".to_string(),
-                }],
-                50,
-                51,
-            ),
-            infix(
-                "-".into(),
-                vec![Symbol {
-                    name: "-".to_string(),
-                }],
-                50,
-                51,
-            ),
-            infix(
-                "*".into(),
-                vec![Symbol {
-                    name: "*".to_string(),
-                }],
-                80,
-                81,
-            ),
-            infix(
-                "=".into(),
-                vec![Symbol {
-                    name: "=".to_string(),
-                }],
-                21,
-                20,
-            ),
+            // postfix ... ( <expr> ) 100
+            postfix("call".into(), vec![Symbol("("), Expr, Symbol(")")], 100),
+            // infix ... + ... 50 51
+            infix("+".into(), vec![Symbol("+")], 50, 51),
+            // infix ... - ... 50 51
+            infix("-".into(), vec![Symbol("-")], 50, 51),
+            // infix ... * ... 80 81
+            infix("*".into(), vec![Symbol("*")], 80, 81),
+            // infix ... = ... 21 20
+            infix("=".into(), vec![Symbol("=")], 21, 20),
         ],
     );
 
@@ -504,8 +408,5 @@ fn test_call_fn() {
 
 #[test]
 fn test_call_block_fn() {
-    complete_parse(
-        "(fn(x){x})(y){7}",
-        "(call-block (paren (fn x x)) y 7)",
-    )
+    complete_parse("(fn(x){x})(y){7}", "(call-block (paren (fn x x)) y 7)")
 }
