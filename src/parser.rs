@@ -1,5 +1,5 @@
 use crate::{
-    sexpr::SExpr,
+    sexpr::{Atom, SExpr},
     token::{Token, Tokenizer},
 };
 
@@ -120,12 +120,12 @@ impl Parser {
             token if token.is_symbol() => {
                 let name = token.text.clone();
                 self.consume(); // consume a symbol from input
-                SExpr::Atom(name)
+                SExpr::Atom(Atom::Symbol(name))
             }
             token if token.is_number() => {
                 let number = token.text.clone();
                 self.consume(); // consume a number from input
-                SExpr::Atom(number)
+                SExpr::Atom(Atom::Natural(number.parse().unwrap()))
             }
             token => panic!("expected an atom, got {:?}", token),
         }
@@ -213,7 +213,7 @@ impl Parser {
     }
 
     fn parse_leading_operator(&mut self, leading_operator: LeadingOp) -> Option<SExpr> {
-        let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
+        let mut children = vec![SExpr::Atom(Atom::Symbol(leading_operator.name.clone()))];
 
         // 記号の内側部分
         for part in leading_operator.parts[1..].iter() {
@@ -249,7 +249,10 @@ impl Parser {
         following_operator: FollowingOp,
         leading_expr: SExpr,
     ) -> Option<SExpr> {
-        let mut children = vec![SExpr::Atom(following_operator.name.clone()), leading_expr];
+        let mut children = vec![
+            SExpr::Atom(Atom::Symbol(following_operator.name.clone())),
+            leading_expr,
+        ];
 
         // 記号の内側部分
         for part in following_operator.parts[1..].iter() {
