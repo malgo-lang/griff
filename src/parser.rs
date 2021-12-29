@@ -167,7 +167,7 @@ impl Parser {
                 for following_operator in self.peek_following_operators(&token.text) {
                     // If the precedence of the following operator is greater than the minimum, skip this operator.
                     if following_operator.kind.left_bp() <= min_bp {
-                        continue ;
+                        continue;
                     }
 
                     self.consume();
@@ -211,7 +211,7 @@ impl Parser {
         }
         operators
     }
-    
+
     fn parse_leading_operator(&mut self, leading_operator: LeadingOp) -> Option<SExpr> {
         let mut children = vec![SExpr::Atom(leading_operator.name.clone())];
 
@@ -243,12 +243,13 @@ impl Parser {
 
         Some(SExpr::List(children))
     }
-    
-    fn parse_following_operator(&mut self, following_operator: FollowingOp, leading_expr: SExpr) -> Option<SExpr> {
-        let mut children = vec![
-            SExpr::Atom(following_operator.name.clone()),
-            leading_expr,
-        ];
+
+    fn parse_following_operator(
+        &mut self,
+        following_operator: FollowingOp,
+        leading_expr: SExpr,
+    ) -> Option<SExpr> {
+        let mut children = vec![SExpr::Atom(following_operator.name.clone()), leading_expr];
 
         // 記号の内側部分
         for part in following_operator.parts[1..].iter() {
@@ -388,7 +389,7 @@ fn test_simple_other_expression() {
     complete_parse("1 = 1 + 2", "(= 1 (+ 1 2))");
     // 2 * 3 = 1 + 2 -> (= (* 2 3) (+ 1 2))
     complete_parse("2 * 3 = 1 + 2", "(= (* 2 3) (+ 1 2))");
-    // 1 = 1 = 1 -> (= (= 1 1) 1) 
+    // 1 = 1 = 1 -> (= (= 1 1) 1)
     complete_parse("1 = 1 = 1", "(= 1 (= 1 1))");
     // (- 1) -> (paren (- 1))
     complete_parse("(- 1)", "(paren (- 1))");
@@ -396,7 +397,7 @@ fn test_simple_other_expression() {
     complete_parse("1 ?", "(? 1)");
     // lambda x.x -> (lambda x x)
     complete_parse("lambda x.x", "(lambda x x)");
-    // (lambda x.x)(1) -> (call (paren (lambda x x)) 1) 
+    // (lambda x.x)(1) -> (call (paren (lambda x x)) 1)
     complete_parse("(lambda x.x)(1)", "(call (paren (lambda x x)) 1)");
     // fn(x){x}(1) -> (call (fn x x) 1)
     complete_parse("fn(x){x}(1)", "(call (fn x x) 1)");
@@ -413,7 +414,7 @@ fn test_comma_list() {
     complete_parse("1, 2", "(, 1 2)");
     // 1, 2, 3 -> (, 1 (, 2 3))
     complete_parse("1, 2, 3", "(, 1 (, 2 3))");
-    
+
     // fn(x, y){x + y} -> (fn (, x y) (+ x y))
     complete_parse("fn(x, y){x + y}", "(fn (, x y) (+ x y))");
     // fn(x, y, z){x + y + z} -> (fn (, x (, y z)) (+ (+ x y) z))
