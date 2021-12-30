@@ -1,7 +1,6 @@
 mod sexpr;
 mod parser;
 mod token;
-mod lisp;
 
 use parser::complete_parse;
 

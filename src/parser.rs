@@ -90,6 +90,12 @@ impl Language {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ParseError {
+    Unexpected { expected: Part, actual: Token },
+    EndOfInput { expected: Part },
+}
+
 pub struct Parser {
     tokens: Vec<Token>,
     position: usize,
@@ -106,8 +112,13 @@ impl Parser {
     }
 
     // read one character
-    fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.position)
+    fn peek(&self) -> Result<&Token, ParseError> {
+        match self.tokens.get(self.position) {
+            Some(token) => Ok(token),
+            None => Err(ParseError::EndOfInput {
+                expected: Part::Expr,
+            }),
+        }
     }
 
     fn consume(&mut self) {
@@ -115,23 +126,26 @@ impl Parser {
     }
 
     // Parse a S-expression
-    fn parse_atom(&mut self) -> SExpr {
+    fn parse_atom(&mut self) -> Result<SExpr, ParseError> {
         match self.peek().unwrap() {
             token if token.is_symbol() => {
                 let name = token.text.clone();
                 self.consume(); // consume a symbol from input
-                SExpr::Atom(Atom::Symbol(name))
+                Ok(SExpr::Atom(Atom::Symbol(name)))
             }
             token if token.is_number() => {
                 let number = token.text.clone();
                 self.consume(); // consume a number from input
-                SExpr::Atom(Atom::Natural(number.parse().unwrap()))
+                Ok(SExpr::Atom(Atom::Natural(number.parse().unwrap())))
             }
-            token => panic!("expected an atom, got {:?}", token),
+            token => Err(ParseError::Unexpected {
+                expected: Part::Atom,
+                actual: token.clone(),
+            }),
         }
     }
 
-    pub fn parse_expr(&mut self, min_bp: u16) -> SExpr {
+    pub fn parse_expr(&mut self, min_bp: u16) -> Result<SExpr, ParseError> {
         let mut leading_expr = {
             let mut expr = None;
             let token = self.peek().unwrap();
@@ -143,10 +157,10 @@ impl Parser {
                 // match a leading operator
                 self.consume();
                 match self.parse_leading_operator(leading_operator) {
-                    Some(e) => {
+                    Ok(e) => {
                         expr = Some(e);
                     }
-                    None => {
+                    Err(_) => {
                         self.position = start_position;
                         continue;
                     }
@@ -155,14 +169,14 @@ impl Parser {
             }
 
             match expr {
-                Some(expr) => expr,
+                Some(expr) => Ok(expr),
                 // マッチする先行演算子がない場合は、atomをパース
                 None => self.parse_atom(),
             }
-        };
+        }?;
 
         'following: loop {
-            if let Some(token) = self.peek() {
+            if let Ok(token) = self.peek() {
                 let start_position = self.position;
                 for following_operator in self.peek_following_operators(&token.text) {
                     // If the precedence of the following operator is greater than the minimum, skip this operator.
@@ -172,18 +186,18 @@ impl Parser {
 
                     self.consume();
                     match self.parse_following_operator(following_operator, leading_expr.clone()) {
-                        Some(e) => {
+                        Ok(e) => {
                             leading_expr = e;
                             continue 'following; // continue to the next following operator
                         }
-                        None => {
+                        Err(_) => {
                             self.position = start_position;
                             continue;
                         }
                     }
                 }
             }
-            return leading_expr;
+            return Ok(leading_expr);
         }
     }
 
@@ -212,21 +226,29 @@ impl Parser {
         operators
     }
 
-    fn parse_part(&mut self, part: &Part) -> Result<Option<SExpr>, ParsePartError> {
+    fn parse_part(&mut self, part: &Part) -> Result<Option<SExpr>, ParseError> {
         match part {
-            Part::Atom => return Ok(Some(self.parse_atom())),
-            Part::Expr => return Ok(Some(self.parse_expr(0))),
+            Part::Atom => {
+                let atom = self.parse_atom()?;
+                Ok(Some(atom))
+            }
+            Part::Expr => {
+                let expr = self.parse_expr(0)?;
+                Ok(Some(expr))
+            }
             Part::Symbol(name) => match self.peek() {
-                Some(token) if token.text == *name => {
+                Ok(token) if token.text == *name => {
                     self.consume();
-                    return Ok(None);
+                    Ok(None)
                 }
-                _ => return Err(ParsePartError::InvalidSymbol),
+                _ => Err(ParseError::EndOfInput {
+                    expected: Part::Symbol(name),
+                }),
             },
         }
     }
 
-    fn parse_leading_operator(&mut self, leading_operator: LeadingOp) -> Option<SExpr> {
+    fn parse_leading_operator(&mut self, leading_operator: LeadingOp) -> Result<SExpr, ParseError> {
         let mut children = vec![SExpr::Atom(Atom::Symbol(leading_operator.name.clone()))];
 
         // 記号の内側部分
@@ -234,24 +256,24 @@ impl Parser {
             match self.parse_part(part) {
                 Ok(Some(e)) => children.push(e),
                 Ok(None) => continue,
-                Err(_) => return None,
+                Err(err) => return Err(err),
             }
         }
 
         // prefix演算子の場合は、後ろに続く式をパース
         if let LeadingOpKind::Prefix { right_bp } = leading_operator.kind {
-            let following_expr = self.parse_expr(right_bp);
+            let following_expr = self.parse_expr(right_bp)?;
             children.push(following_expr);
         }
 
-        Some(SExpr::List(children))
+        Ok(SExpr::List(children))
     }
 
     fn parse_following_operator(
         &mut self,
         following_operator: FollowingOp,
         leading_expr: SExpr,
-    ) -> Option<SExpr> {
+    ) -> Result<SExpr, ParseError> {
         let mut children = vec![
             SExpr::Atom(Atom::Symbol(following_operator.name.clone())),
             leading_expr,
@@ -262,22 +284,18 @@ impl Parser {
             match self.parse_part(part) {
                 Ok(Some(e)) => children.push(e),
                 Ok(None) => continue,
-                Err(_) => return None,
+                Err(err) => return Err(err),
             }
         }
 
         // If the following operator is a infix operator, parse the following expression.
         if let FollowingOpKind::Infix { right_bp, .. } = following_operator.kind {
-            let following_expr = self.parse_expr(right_bp);
+            let following_expr = self.parse_expr(right_bp)?;
             children.push(following_expr);
         }
 
-        Some(SExpr::List(children))
+        Ok(SExpr::List(children))
     }
-}
-
-enum ParsePartError {
-    InvalidSymbol,
 }
 
 pub fn complete_parse(input: &str, expected: &str) {
@@ -357,7 +375,10 @@ pub fn complete_parse(input: &str, expected: &str) {
 
     let mut parser = Parser::new(tokens, 0, language);
     let expr = parser.parse_expr(0);
-    assert_eq!(expr.to_string(), expected);
+    match expr {
+        Ok(expr) => assert_eq!(expr.to_string(), expected),
+        Err(err) => panic!("Parse error: {:?}", err),
+    }
 }
 
 #[test]
