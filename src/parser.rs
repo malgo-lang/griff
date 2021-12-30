@@ -393,7 +393,7 @@ fn test_simple_other_expression() {
     // 2 * 3 = 1 + 2 -> (= (* 2 3) (+ 1 2))
     complete_parse("2 * 3 = 1 + 2", "(= (* 2 3) (+ 1 2))");
     // 1 = 1 = 1 -> (= (= 1 1) 1)
-    complete_parse("1 = 1 = 1", "(= 1 (= 1 1))");
+    complete_parse("1 = 1 = 1", "(= (= 1 1) 1)");
     // (- 1) -> (paren (- 1))
     complete_parse("(- 1)", "(paren (- 1))");
     // 1 ? -> (? 1)
