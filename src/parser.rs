@@ -212,26 +212,29 @@ impl Parser {
         operators
     }
 
+    fn parse_part(&mut self, part: &Part) -> Result<Option<SExpr>, ParsePartError> {
+        match part {
+            Part::Atom => return Ok(Some(self.parse_atom())),
+            Part::Expr => return Ok(Some(self.parse_expr(0))),
+            Part::Symbol(name) => match self.peek() {
+                Some(token) if token.text == *name => {
+                    self.consume();
+                    return Ok(None);
+                }
+                _ => return Err(ParsePartError::InvalidSymbol),
+            },
+        }
+    }
+
     fn parse_leading_operator(&mut self, leading_operator: LeadingOp) -> Option<SExpr> {
         let mut children = vec![SExpr::Atom(Atom::Symbol(leading_operator.name.clone()))];
 
         // 記号の内側部分
         for part in leading_operator.parts[1..].iter() {
-            match part {
-                Part::Atom => {
-                    children.push(self.parse_atom());
-                }
-                Part::Expr => {
-                    children.push(self.parse_expr(0));
-                }
-                Part::Symbol(name) => match self.peek() {
-                    Some(token) if token.text == *name => {
-                        self.consume();
-                    }
-                    _ => {
-                        return None;
-                    }
-                },
+            match self.parse_part(part) {
+                Ok(Some(e)) => children.push(e),
+                Ok(None) => continue,
+                Err(_) => return None,
             }
         }
 
@@ -256,21 +259,10 @@ impl Parser {
 
         // 記号の内側部分
         for part in following_operator.parts[1..].iter() {
-            match part {
-                Part::Atom => {
-                    children.push(self.parse_atom());
-                }
-                Part::Expr => {
-                    children.push(self.parse_expr(0));
-                }
-                Part::Symbol(name) => match self.peek() {
-                    Some(token) if token.text == *name => {
-                        self.consume();
-                    }
-                    _ => {
-                        return None;
-                    }
-                },
+            match self.parse_part(part) {
+                Ok(Some(e)) => children.push(e),
+                Ok(None) => continue,
+                Err(_) => return None,
             }
         }
 
@@ -282,6 +274,10 @@ impl Parser {
 
         Some(SExpr::List(children))
     }
+}
+
+enum ParsePartError {
+    InvalidSymbol,
 }
 
 pub fn complete_parse(input: &str, expected: &str) {
