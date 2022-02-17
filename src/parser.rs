@@ -1,41 +1,281 @@
-use std::{collections::HashMap, num::ParseIntError};
-
 use nom::{
     branch::alt,
-    bytes::complete::{is_not, tag, take_while_m_n},
-    character::complete::{char, multispace0, multispace1},
-    combinator::{cut, map, map_opt, map_res, value, verify},
-    error::{context, ContextError, FromExternalError, ParseError},
-    multi::{fold_many0, separated_list0},
-    number::complete::double,
-    sequence::{delimited, preceded, separated_pair, terminated},
+    bytes::complete::{is_not, tag, take_until, take_while_m_n},
+    character::complete::{alpha1, alphanumeric1, char, multispace0, multispace1, none_of, one_of},
+    combinator::{map, map_opt, map_res, opt, recognize, value, verify},
+    error::{FromExternalError, ParseError},
+    multi::{fold_many0, many0, many1, separated_list0, separated_list1},
+    sequence::{delimited, separated_pair, tuple},
+    sequence::{pair, preceded, terminated},
     IResult,
 };
 
-#[derive(Debug, PartialEq)]
-pub enum JsonValue {
-    Null,
-    Str(String),
-    Boolean(bool),
-    Num(f64),
-    Array(Vec<JsonValue>),
-    Object(HashMap<String, JsonValue>),
+use crate::ast::{Id, Literal, Type};
+
+pub fn parse_literal<'a>(input: &'a str) -> IResult<&'a str, Literal> {
+    ws(alt((
+        map(terminated(float, tag("f32")), |number_str| {
+            Literal::Float32(number_str.parse::<f32>().unwrap())
+        }),
+        map(terminated(float, tag("f64")), |number_str| {
+            Literal::Float64(number_str.parse::<f64>().unwrap())
+        }),
+        map(float, |number_str| {
+            Literal::Float(number_str.parse::<f64>().unwrap())
+        }),
+        map(terminated(decimal, tag("i32")), |number_str| {
+            Literal::Int32(number_str.parse::<i32>().unwrap())
+        }),
+        map(terminated(decimal, tag("i64")), |number_str| {
+            Literal::Int64(number_str.parse::<i64>().unwrap())
+        }),
+        map(decimal, |number_str| {
+            Literal::Int(number_str.parse::<i64>().unwrap())
+        }),
+        map(
+            delimited(
+                char('\''),
+                alt((parse_escaped_char, none_of("\'"))),
+                char('\''),
+            ),
+            Literal::Char,
+        ),
+        map(parse_string, Literal::String),
+    )))(input)
 }
 
-// JSON parser
+#[test]
+fn test_parse_literal() {
+    let data = "123i32";
+    let result = parse_literal(data);
+    assert_eq!(result, Ok(("", Literal::Int32(123))));
 
-// A combinator that takes a parser and produces a parser that also consomes both leading and trailing whitespace, returning the result of the original parser.
-fn ws<'a, F, O, E>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
+    let data = "3.14f32";
+    let result = parse_literal(data);
+    assert_eq!(result, Ok(("", Literal::Float32(3.14))));
+
+    let data = "314E-2f64";
+    let result = parse_literal(data);
+    assert_eq!(result, Ok(("", Literal::Float64(314E-2))));
+
+    let data = "'a'";
+    let result = parse_literal(data);
+    assert_eq!(result, Ok(("", Literal::Char('a'))));
+
+    let data = "'\\n'";
+    let result = parse_literal(data);
+    assert_eq!(result, Ok(("", Literal::Char('\n'))));
+
+    let data = "'\\u{1F602}'";
+    let result = parse_literal(data);
+    assert_eq!(result, Ok(("", Literal::Char('\u{1F602}'))));
+
+    let data = "\"Hello, world!\"";
+    let result = parse_literal(data);
+    assert_eq!(
+        result,
+        Ok(("", Literal::String("Hello, world!".to_string())))
+    );
+}
+
+fn parse_single_type<'a>(input: &'a str) -> IResult<&'a str, Type> {
+    ws(alt((
+        // ident
+        map(identifier, |id| {
+            Type::Ident(Id {
+                name: id.to_string(),
+            })
+        }),
+        // tuple
+        map(
+            delimited(
+                ws(char('(')),
+                separated_pair(
+                    parse_type,
+                    ws(char(',')),
+                    separated_list1(ws(char(',')), parse_type),
+                ),
+                ws(char(')')),
+            ),
+            |(t, mut ts)| {
+                let mut types = vec![t];
+                types.append(&mut ts);
+                Type::Tuple(types)
+            },
+        ),
+        // parens
+        delimited(ws(char('(')), parse_type, ws(char(')'))),
+    )))(input)
+}
+
+pub fn parse_type<'a>(input: &'a str) -> IResult<&'a str, Type> {
+    ws(alt((
+        // application
+        map(
+            tuple((
+                parse_single_type,
+                parse_single_type,
+                many0(parse_single_type),
+            )),
+            |(fun, arg0, mut rest_args)| {
+                let mut args = vec![arg0];
+                args.append(&mut rest_args);
+
+                Type::App {
+                    fun: Box::new(fun),
+                    args,
+                }
+            },
+        ),
+        parse_single_type,
+    )))(input)
+}
+
+#[test]
+fn test_parse_type() {
+    let data = "Int";
+    let result = parse_type(data);
+    assert_eq!(
+        result,
+        Ok((
+            "",
+            Type::Ident(Id {
+                name: "Int".to_string()
+            })
+        ))
+    );
+
+    let data = "(Int, Int)";
+    let result = parse_type(data);
+    assert_eq!(
+        result,
+        Ok((
+            "",
+            Type::Tuple(vec![
+                Type::Ident(Id {
+                    name: "Int".to_string()
+                }),
+                Type::Ident(Id {
+                    name: "Int".to_string()
+                }),
+            ])
+        ))
+    );
+
+    let data = "List Int";
+    let result = parse_type(data);
+    assert_eq!(
+        result,
+        Ok((
+            "",
+            Type::App {
+                fun: Box::new(Type::Ident(Id {
+                    name: "List".to_string()
+                })),
+                args: vec![Type::Ident(Id {
+                    name: "Int".to_string()
+                })],
+            }
+        ))
+    );
+
+    let data = "Either Int String";
+    let result = parse_type(data);
+    assert_eq!(
+        result,
+        Ok((
+            "",
+            Type::App {
+                fun: Box::new(Type::Ident(Id {
+                    name: "Either".to_string()
+                })),
+                args: vec![
+                    Type::Ident(Id {
+                        name: "Int".to_string()
+                    }),
+                    Type::Ident(Id {
+                        name: "String".to_string()
+                    }),
+                ],
+            }
+        ))
+    );
+    
+    let data = "Either (List Int) (List String)";
+    let result = parse_type(data);
+    assert_eq!(
+        result,
+        Ok((
+            "",
+            Type::App {
+                fun: Box::new(Type::Ident(Id {
+                    name: "Either".to_string()
+                })),
+                args: vec![
+                    Type::App {
+                        fun: Box::new(Type::Ident(Id {
+                            name: "List".to_string()
+                        })),
+                        args: vec![Type::Ident(Id {
+                            name: "Int".to_string()
+                        })],
+                    },
+                    Type::App {
+                        fun: Box::new(Type::Ident(Id {
+                            name: "List".to_string()
+                        })),
+                        args: vec![Type::Ident(Id {
+                            name: "String".to_string()
+                        })],
+                    },
+                ],
+            }
+        ))
+    );
+}
+
+/// A combinator that takes a parser `inner` and produces a parser that also consumes both leading and
+/// trailing whitespace, returning the output of `inner`.
+fn ws<'a, F: 'a, O, E: ParseError<&'a str>>(
+    inner: F,
+) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
     F: FnMut(&'a str) -> IResult<&'a str, O, E>,
-    E: ParseError<&'a str>,
 {
     delimited(multispace0, inner, multispace0)
 }
 
-// parser combinators are constructed from the bottom up:
-// first we write parsers for the smallest elements (escaped characters),
-// then combine them into larger parsers.
+fn peol_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E> {
+    value(
+        (), // Output is thrown away.
+        pair(tag("--"), is_not("\n\r")),
+    )(i)
+}
+
+// TODO: support nested comments
+fn pinline_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E> {
+    value(
+        (), // Output is thrown away.
+        tuple((tag("{-"), take_until("-}"), tag("-}"))),
+    )(i)
+}
+
+/// Parses a identifier that may start with a letter or an underscore and may contain underscores, letters and numbers.
+pub fn identifier<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
+    recognize(pair(
+        alt((alpha1, tag("_"))),
+        many0(alt((alphanumeric1, tag("_")))),
+    ))(input)
+}
+
+// A string is:
+// - Enclosed by double quotes
+// - Can contain any raw unescaped code point besides \ and "
+// - Matches the following escape sequences: \b, \f, \n, \r, \t, \", \\, \/
+// - Matches code points like Rust: \u{XXXX}, where XXXX can be up to 6
+//   hex characters
+// - an escape followed by whitespace consumes all whitespace between the
+//   escape and the next non-whitespace character
 
 /// Parse a unicode sequence, of the form u{XXXX}, where XXXX is 1 to 6
 /// hexadecimal numerals. We will combine this later with parse_escaped_char
@@ -44,28 +284,20 @@ fn parse_unicode<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
-    // `take_while_m_n` parses between `m` and `n` bytes (inclusive) that match
-    // a predicate. `parse_hex` here parses between 1 and 6 hexadecimal numerals.
+    // `parse_hex` parses between 1 and 6 hexadecimal numerals.
     let parse_hex = take_while_m_n(1, 6, |c: char| c.is_ascii_hexdigit());
 
-    // `preceded` takes a prefix parser, and if it succeeds, returns the result
-    // of the body parser. In this case, it parses u{XXXX}.
+    // It parses u{XXXX}.
     let parse_delimited_hex = preceded(
         char('u'),
-        // `delimited` is like `preceded`, but it parses both a prefix and a suffix.
-        // It returns the result of the middle parser. In this case, it parses
-        // {XXXX}, where XXXX is 1 to 6 hex numerals, and returns XXXX
+        // It parses {XXXX}, where XXXX is 1 to 6 hex numerals, and returns XXXX
         delimited(char('{'), parse_hex, char('}')),
     );
 
-    // `map_res` takes the result of a parser and applies a function that returns
-    // a Result. In this case we take the hex bytes from parse_hex and attempt to
-    // convert them to a u32.
+    // We take the hex bytes from parse_hex and attempt to convert them to a u32.
     let parse_u32 = map_res(parse_delimited_hex, move |hex| u32::from_str_radix(hex, 16));
 
-    // map_opt is like map_res, but it takes an Option instead of a Result. If
-    // the function returns None, map_opt returns an error. In this case, because
-    // not all u32 values are valid unicode code points, we have to fallibly
+    // Because not all u32 values are valid unicode code points, we have to fallibly
     // convert to char with from_u32.
     map_opt(parse_u32, |value| std::char::from_u32(value))(input)
 }
@@ -77,14 +309,10 @@ where
 {
     preceded(
         char('\\'),
-        // `alt` tries each parser in sequence, returning the result of
-        // the first successful match
         alt((
             parse_unicode,
-            // The `value` parser returns a fixed value (the first argument) if its
-            // parser (the second argument) succeeds. In these cases, it looks for
-            // the marker characters (n, r, t, etc) and returns the matching
-            // character (\n, \r, \t, etc).
+            // It looks for the marker characters (n, r, t, etc) and
+            // returns the matching character (\n, \r, \t, etc).
             value('\n', char('n')),
             value('\r', char('r')),
             value('\t', char('t')),
@@ -106,15 +334,10 @@ fn parse_escaped_whitespace<'a, E: ParseError<&'a str>>(
 }
 
 /// Parse a non-empty block of text that doesn't include \ or "
-fn parse_literal<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
-    // `is_not` parses a string of 0 or more characters that aren't one of the
-    // given characters.
+fn parse_literal_block<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
     let not_quote_slash = is_not("\"\\");
 
-    // `verify` runs a parser, then runs a verification function on the output of
-    // the parser. The verification function accepts out output only if it
-    // returns true. In this case, we want to ensure that the output of is_not
-    // is non-empty.
+    // we want to ensure that the output of is_not is non-empty.
     verify(not_quote_slash, |s: &str| !s.is_empty())(input)
 }
 
@@ -135,9 +358,7 @@ where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
     alt((
-        // The `map` combinator runs a parser, then applies a function to the output
-        // of that parser.
-        map(parse_literal, StringFragment::Literal),
+        map(parse_literal_block, StringFragment::Literal),
         map(parse_escaped_char, StringFragment::EscapedChar),
         value(StringFragment::EscapedWS, parse_escaped_whitespace),
     ))(input)
@@ -149,8 +370,6 @@ fn parse_string<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {
-    // fold_many0 is the equivalent of iterator::fold. It runs a parser in a loop,
-    // and for each output value, calls a folding function on each output value.
     let build_string = fold_many0(
         // Our parser function– parses a single string fragment
         parse_fragment,
@@ -168,142 +387,44 @@ where
         },
     );
 
-    // Finally, parse the string. Note that, if `build_string` could accept a raw
-    // " character, the closing delimiter " would never match. When using
-    // `delimited` with a looping parser (like fold_many0), be sure that the
-    // loop won't accidentally match your closing delimiter!
     delimited(char('"'), build_string, char('"'))(input)
 }
 
-fn boolean<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, bool, E> {
-    alt((value(true, tag("true")), value(false, tag("false"))))(input)
-}
-
-fn null<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, (), E> {
-    value((), tag("null"))(input)
-}
-
-fn string<
-    'a,
-    E: ParseError<&'a str> + ContextError<&'a str> + FromExternalError<&'a str, ParseIntError>,
->(
-    input: &'a str,
-) -> IResult<&'a str, String, E> {
-    context("string", parse_string)(input)
-}
-
-fn array<
-    'a,
-    E: ParseError<&'a str> + ContextError<&'a str> + FromExternalError<&'a str, ParseIntError>,
->(
-    input: &'a str,
-) -> IResult<&'a str, Vec<JsonValue>, E> {
-    context(
-        "array",
-        preceded(
-            char('['),
-            cut(terminated(
-                separated_list0(ws(char(',')), json_value),
-                ws(char(']')),
-            )),
-        ),
-    )(input)
-}
-
-fn key_value<
-    'a,
-    E: ParseError<&'a str> + ContextError<&'a str> + FromExternalError<&'a str, ParseIntError>,
->(
-    input: &'a str,
-) -> IResult<&'a str, (String, JsonValue), E> {
-    separated_pair(ws(string), cut(ws(char(':'))), json_value)(input)
-}
-
-fn hash<
-    'a,
-    E: ParseError<&'a str> + ContextError<&'a str> + FromExternalError<&'a str, ParseIntError>,
->(
-    input: &'a str,
-) -> IResult<&'a str, HashMap<String, JsonValue>, E> {
-    context(
-        "map",
-        preceded(
-            char('{'),
-            cut(terminated(
-                map(separated_list0(ws(char(',')), key_value), |tuple_vec| {
-                    tuple_vec
-                        .into_iter()
-                        .map(|(k, v)| (String::from(k), v))
-                        .collect()
-                }),
-                ws(char('}')),
-            )),
-        ),
-    )(input)
-}
-
-pub fn json_value<
-    'a,
-    E: ParseError<&'a str> + ContextError<&'a str> + FromExternalError<&'a str, ParseIntError>,
->(
-    input: &'a str,
-) -> IResult<&'a str, JsonValue, E> {
-    ws(alt((
-        map(hash, JsonValue::Object),
-        map(array, JsonValue::Array),
-        map(string, JsonValue::Str),
-        map(double, JsonValue::Num),
-        map(boolean, JsonValue::Boolean),
-        map(null, |_| JsonValue::Null),
-    )))(input)
-}
-
-pub fn root<
-    'a,
-    E: ParseError<&'a str> + ContextError<&'a str> + FromExternalError<&'a str, ParseIntError>,
->(
-    input: &'a str,
-) -> IResult<&'a str, JsonValue, E> {
-    context(
-        "root",
-        ws(alt((
-            map(hash, JsonValue::Object),
-            map(array, JsonValue::Array),
-            map(null, |_| JsonValue::Null),
-        ))),
-    )(input)
-}
-
 #[test]
-fn test_parse() {
-    use nom::error::ErrorKind;
-
-    let data = r#"
-    {
-      "name": "John Doe",
-      "age": 43,
-      "phones": [
-        "+44 1234567",
-        "+44 2345678"
-      ]
-    }
-  "#;
-    println!("{:?}", root::<(&str, ErrorKind)>(data));
+fn test_parse_string() {
+    let data = "\"hello world\"";
     assert_eq!(
-        root::<(&str, ErrorKind)>(data),
-        Ok((
-            "",
-            JsonValue::Object(HashMap::from([
-                ("name".to_string(), JsonValue::Str("John Doe".to_string())),
-                ("age".to_string(), JsonValue::Num(43.0)),
-                (
-                    "phones".to_string(),
-                    JsonValue::Array(vec![
-                        JsonValue::Str("+44 1234567".to_string()),
-                        JsonValue::Str("+44 2345678".to_string()),
-                    ])
-                ),
-            ]))
-        ))
+        parse_string::<()>(data),
+        Ok(("", String::from("hello world"),))
     );
+    let data = "\"tab:\\tafter tab, newline:\\nnew line, quote: \\\", emoji: \\u{1F602}, newline:\\nescaped whitespace: \\    abc\"";
+    assert_eq!(parse_string::<()>(data), Ok((
+        "",
+        String::from("tab:\tafter tab, newline:\nnew line, quote: \", emoji: 😂, newline:\nescaped whitespace: abc"),
+    )));
+}
+
+/// Parses a decimal number.
+fn decimal<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
+    recognize(many1(terminated(one_of("0123456789"), many0(char('_')))))(input)
+}
+
+// Parses a floating point number.
+fn float<'a>(input: &'a str) -> IResult<&'a str, &'a str> {
+    alt((
+        // Case one: .42
+        recognize(tuple((
+            char('.'),
+            decimal,
+            opt(tuple((one_of("eE"), opt(one_of("+-")), decimal))),
+        ))), // Case two: 42e42 and 42.42e42
+        recognize(tuple((
+            decimal,
+            opt(preceded(char('.'), decimal)),
+            one_of("eE"),
+            opt(one_of("+-")),
+            decimal,
+        ))), // Case three: 42. and 42.42
+        recognize(tuple((decimal, char('.'), opt(decimal)))),
+    ))(input)
 }

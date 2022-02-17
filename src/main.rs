@@ -3,11 +3,8 @@ mod pratt;
 mod sexpr;
 mod ast;
 
-use nom::error::ErrorKind;
 use pratt::parser::Parser;
 use pratt::token::Tokenizer;
-
-use crate::parser::root;
 
 fn main() {
     // Read from stdin
@@ -23,6 +20,4 @@ fn main() {
         let result = parser.parse_expr(0);
         println!("{:?}", result);
     }
-
-    println!("{:?}", root::<(&str, ErrorKind)>(&input));
 }
