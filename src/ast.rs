@@ -1,9 +1,9 @@
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Id {
     pub name: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Int32(i32),
     Int64(i64),
@@ -15,7 +15,7 @@ pub enum Literal {
     String(String),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Type {
     App { fun: Box<Type>, args: Vec<Type> },
     Ident(Id),
@@ -25,7 +25,7 @@ pub enum Type {
     Block(Box<Type>), // equivalent to () -> a
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Exp {
     Ident(Id),
     Unboxed(Literal),
@@ -51,20 +51,20 @@ pub enum Exp {
     Parens(Box<Exp>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Stmt {
     Let { name: Id, exp: Box<Exp> },
     With { name: Option<Id>, exp: Box<Exp> },
     NoBind(Box<Exp>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Clause {
     patterns: Vec<Pat>,
     body: Box<Exp>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Pat {
     Ident(Id),
     Wildcard,
