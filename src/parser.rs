@@ -22,6 +22,10 @@ use self::{
     string::{parse_escaped_char, parse_string},
 };
 
+pub fn parse<'a>(input: &'a str) -> IResult<&'a str, Exp> {
+    parse_exp(input)
+}
+
 fn parse_single_type<'a>(input: &'a str) -> IResult<&'a str, Type> {
     ws(alt((
         // ident
@@ -170,7 +174,7 @@ fn parse_ident<'a>(input: &'a str) -> IResult<&'a str, Exp> {
     }))(input)
 }
 
-pub fn parse_literal<'a>(input: &'a str) -> IResult<&'a str, Literal> {
+fn parse_literal<'a>(input: &'a str) -> IResult<&'a str, Literal> {
     alt((
         map(terminated(float, tag("f32")), |number_str| {
             Literal::Float32(number_str.parse::<f32>().unwrap())

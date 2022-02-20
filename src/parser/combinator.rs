@@ -3,10 +3,10 @@ use nom::{
     bytes::complete::{is_not, tag, take_until},
     character::complete::{alpha1, alphanumeric1, char, multispace0, one_of},
     combinator::{map, opt, recognize, value},
-    error::{ErrorKind, ParseError},
+    error::ParseError,
     multi::{many0, many1, separated_list1},
     sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
-    Err, IResult, InputLength, Parser,
+    IResult, Parser,
 };
 
 /// Parses a identifier that may start with a letter or an underscore and may contain underscores, letters and numbers.
