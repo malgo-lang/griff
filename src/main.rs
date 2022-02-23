@@ -1,5 +1,6 @@
 mod ast;
 mod nom_parser;
+mod parser;
 use std::io::{self, Read};
 
 fn main() -> io::Result<()> {

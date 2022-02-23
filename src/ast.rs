@@ -3,6 +3,12 @@ pub struct Id {
     pub name: String,
 }
 
+impl Id {
+    pub fn new(name: String) -> Self {
+        Self { name }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
     Int32(i32),
