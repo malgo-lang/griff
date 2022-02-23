@@ -1,14 +1,8 @@
 use combine::{
-    any, attempt, between, choice,
-    error::Commit,
-    many, many1, not_followed_by, optional,
-    parser::{
-        char::{char, digit, spaces},
-        function::parser,
-    },
-    satisfy, satisfy_map, ParseError, Parser, Stream, StreamOnce,
+    attempt, between, choice, many, many1, not_followed_by, optional, parser,
+    parser::char::{char, digit, spaces},
+    satisfy, sep_end_by, ParseError, Parser, Stream, StreamOnce,
 };
-use nom::character;
 
 use crate::ast::{Exp, Id, Literal};
 
@@ -35,6 +29,56 @@ use crate::ast::{Exp, Id, Literal};
  * char := '\'' [^'] '\''
  * identifier := [a-zA-Z_][a-zA-Z0-9_]*
  */
+
+parser! {
+    fn expression[Input]()(Input) -> Exp
+        where [ Input: Stream<Token = char> ]
+    {
+        suffix_operation_like()
+    }
+}
+
+fn suffix_operation_like<Input>() -> impl Parser<Input, Output = Exp>
+where
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+{
+    (atomic_expression(), many(suffix_operator())).map(
+        |(expression, suffix_operators): (_, Vec<_>)| {
+            suffix_operators
+                .into_iter()
+                .fold(expression, |expression, arguments| Exp::App {
+                    fun: Box::new(expression),
+                    args: arguments,
+                })
+        },
+    )
+}
+
+fn suffix_operator<Input>() -> impl Parser<Input, Output = Vec<Exp>>
+where
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+{
+    (
+        lex(char('(')),
+        sep_end_by(expression(), lex(char(','))),
+        lex(char(')')),
+    )
+        .map(|(_, arguments, _)| arguments)
+}
+
+fn atomic_expression<Input>() -> impl Parser<Input, Output = Exp>
+where
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+{
+    choice((
+        literal().map(Exp::Literal),
+        identifier().map(Exp::Ident),
+        between(char('('), char(')'), expression()),
+    ))
+}
 
 fn literal<Input>() -> impl Parser<Input, Output = Literal>
 where
@@ -236,5 +280,67 @@ mod tests {
         let input = "'a'";
         let result = literal().parse(input);
         assert_eq!(result.unwrap(), (Literal::Char('a'), ""));
+    }
+
+    #[test]
+    fn test_atomic_expression() {
+        let input = "123";
+        let result = atomic_expression().parse(input);
+        assert_eq!(result.unwrap(), (Exp::Literal(Literal::Int(123)), ""));
+
+        let input = "(123)";
+        let result = atomic_expression().parse(input);
+        assert_eq!(result.unwrap(), (Exp::Literal(Literal::Int(123)), ""));
+
+        let input = "(f(x))";
+        let result = atomic_expression().parse(input);
+        assert_eq!(
+            result.unwrap(),
+            (
+                Exp::App {
+                    fun: Box::new(Exp::Ident(Id::new("f".to_string()))),
+                    args: vec![Exp::Ident(Id::new("x".to_string()))],
+                },
+                ""
+            )
+        );
+    }
+
+    #[test]
+    fn test_suffix_operation_like() {
+        let input = "f(x, y)";
+        let result = suffix_operation_like().parse(input);
+        assert_eq!(
+            result.unwrap(),
+            (
+                Exp::App {
+                    fun: Box::new(Exp::Ident(Id::new("f".to_string()))),
+                    args: vec![
+                        Exp::Ident(Id::new("x".to_string())),
+                        Exp::Ident(Id::new("y".to_string())),
+                    ],
+                },
+                ""
+            )
+        );
+    }
+
+    #[test]
+    fn test_expression() {
+        let input = "f(x, y)";
+        let result = expression().parse(input);
+        assert_eq!(
+            result.unwrap(),
+            (
+                Exp::App {
+                    fun: Box::new(Exp::Ident(Id::new("f".to_string()))),
+                    args: vec![
+                        Exp::Ident(Id::new("x".to_string())),
+                        Exp::Ident(Id::new("y".to_string())),
+                    ],
+                },
+                ""
+            )
+        );
     }
 }

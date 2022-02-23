@@ -11,11 +11,7 @@ impl Id {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Literal {
-    Int32(i32),
-    Int64(i64),
     Int(i64),
-    Float32(f32),
-    Float64(f64),
     Float(f64),
     Char(char),
     String(String),
@@ -34,8 +30,7 @@ pub enum Type {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Exp {
     Ident(Id),
-    Unboxed(Literal),
-    Boxed(Literal),
+    Literal(Literal),
     App {
         fun: Box<Exp>,
         args: Vec<Exp>,
