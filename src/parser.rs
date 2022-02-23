@@ -1,346 +1,224 @@
-use combine::{
-    attempt, between, choice, many, many1, not_followed_by, optional, parser,
-    parser::char::{char, digit, spaces},
-    satisfy, sep_end_by, ParseError, Parser, Stream, StreamOnce,
+use crate::{
+    ast::{Exp, Id, Literal},
+    lexer::{Lexer, Token, TokenKind},
 };
 
-use crate::ast::{Exp, Id, Literal};
+pub struct Parser {
+    tokens: Vec<Token>,
+    cur: usize,
+}
 
-/*
- * expression := binary_operation
- *
- * binary_operation := prefix_operation_like (binary_operator prefix_operation_like)*
- * binary_operator := '+' | '-' | '*' | '/' | '%' | '^' | '==' | '!=' | '<' | '>' | '<=' | '>='
- *
- * prefix_operation_like := prefix_operation | suffix_operation_like
- *
- * prefix_operation := prefix_operator prefix_operation_like
- * prefix_operator := '!'
- *
- * suffix_operation_like := atomic_expression suffix_operator*
- * suffix_operator := '(' sep_end_by(expression, ',') ')'
- *
- * atomic_expression := literal | identifier | '(' expression ')'
- *
- * literal := integer | float | string | char
- * integer := [0-9]+
- * float := [0-9]+ '.' [0-9]+
- * string := '"' [^"]* '"'
- * char := '\'' [^'] '\''
- * identifier := [a-zA-Z_][a-zA-Z0-9_]*
- */
+type ParseError = String;
 
-parser! {
-    fn expression[Input]()(Input) -> Exp
-        where [ Input: Stream<Token = char> ]
-    {
-        suffix_operation_like()
+const RESERVED: [&'static str; 3] = ["(", ")", ","];
+
+impl Parser {
+    pub fn new<'a>(lexer: Lexer<'a>) -> Parser {
+        let tokens = lexer.lex();
+        Parser { tokens, cur: 0 }
     }
-}
 
-fn suffix_operation_like<Input>() -> impl Parser<Input, Output = Exp>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    (atomic_expression(), many(suffix_operator())).map(
-        |(expression, suffix_operators): (_, Vec<_>)| {
-            suffix_operators
-                .into_iter()
-                .fold(expression, |expression, arguments| Exp::App {
-                    fun: Box::new(expression),
-                    args: arguments,
-                })
-        },
-    )
-}
-
-fn suffix_operator<Input>() -> impl Parser<Input, Output = Vec<Exp>>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    (
-        lex(char('(')),
-        sep_end_by(expression(), lex(char(','))),
-        lex(char(')')),
-    )
-        .map(|(_, arguments, _)| arguments)
-}
-
-fn atomic_expression<Input>() -> impl Parser<Input, Output = Exp>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    choice((
-        literal().map(Exp::Literal),
-        identifier().map(Exp::Ident),
-        between(char('('), char(')'), expression()),
-    ))
-}
-
-fn literal<Input>() -> impl Parser<Input, Output = Literal>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    choice((number_literal(), string_literal(), char_literal()))
-}
-
-fn number_literal<Input>() -> impl Parser<Input, Output = Literal>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    choice((attempt(int_literal()), float_literal()))
-}
-
-fn float_literal<Input>() -> impl Parser<Input, Output = Literal>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    float().map(|f| Literal::Float(f))
-}
-
-fn int_literal<Input>() -> impl Parser<Input, Output = Literal>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    integer().map(|i| Literal::Int(i))
-}
-
-fn string_literal<Input>() -> impl Parser<Input, Output = Literal>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    lex((
-        char('"'),
-        many(choice((
-            satisfy(|c| c != '"' && c != '\\'),
-            char('\\').with(choice((
-                char('"'),
-                char('\''),
-                char('\\'),
-                char('n'),
-                char('r'),
-                char('t'),
-            ))),
-        ))),
-        char('"'),
-    ))
-    .map(|(_, s, _): (_, String, _)| Literal::String(s))
-}
-
-fn char_literal<Input>() -> impl Parser<Input, Output = Literal>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    lex((
-        char('\''),
-        choice((
-            satisfy(|c| c != '"' && c != '\\'),
-            char('\\').with(choice((
-                char('"'),
-                char('\''),
-                char('\\'),
-                char('n'),
-                char('r'),
-                char('t'),
-            ))),
-        )),
-        char('\''),
-    ))
-    .map(|(_, c, _): (_, char, _)| Literal::Char(c))
-}
-
-// Parse a identifier.
-fn identifier<Input>() -> impl Parser<Input, Output = Id>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    lex(raw_identifier()).expected("identifier")
-}
-
-fn raw_identifier<Input>() -> impl Parser<Input, Output = Id>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    (
-        satisfy(|c: char| c.is_ascii_alphabetic() || c == '_'),
-        many(satisfy(|c: char| c.is_ascii_alphanumeric() || c == '_')),
-    )
-        .map(|(head, tail): (char, String)| Id::new([head.into(), tail].concat()))
-}
-
-fn lex<Input, P>(p: P) -> impl Parser<Input, Output = P::Output>
-where
-    P: Parser<Input>,
-    Input: Stream<Token = char>,
-    <Input as StreamOnce>::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    p.skip(spaces())
-}
-
-fn integer<Input>() -> impl Parser<Input, Output = i64>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    let i = many1(digit()).map(|s: String| {
-        let mut n = 0;
-        for c in s.chars() {
-            n = n * 10 + (c as i64 - '0' as i64);
+    pub fn parse(mut self) -> Result<Exp, ParseError> {
+        let exp = self.expression()?;
+        if self.peek().kind != TokenKind::EOF {
+            Err(format!("unexpected token: {:?}", self.tokens[self.cur]))
+        } else {
+            Ok(exp)
         }
-        n
-    });
+    }
 
-    lex((
-        optional(char('-'))
-            .and(i)
-            .map(|(sign, n)| if sign.is_some() { -n } else { n }),
-        not_followed_by(choice((char('.'), char('e'), char('E')))),
-    ))
-    .map(|(n, _)| n)
-    .expected("integer")
-}
+    fn peek(&self) -> &Token {
+        &self.tokens[self.cur]
+    }
 
-fn float<Input>() -> impl Parser<Input, Output = f64>
-where
-    Input: Stream<Token = char>,
-    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
-{
-    let i = optional(char('-'))
-        .and(many1(digit()).map(|s: String| {
-            let mut n = 0;
-            for c in s.chars() {
-                n = n * 10 + (c as i64 - '0' as i64);
-            }
-            n
-        }))
-        .map(|(sign, n)| if sign.is_some() { -n } else { n })
-        .map(|x| x as f64);
-    let fractional = many(digit()).map(|digits: String| {
-        let mut magnitude = 1.0;
-        digits.chars().fold(0.0, |acc, d| {
-            magnitude /= 10.0;
-            match d.to_digit(10) {
-                Some(d) => acc + (d as f64) * magnitude,
-                None => panic!("Not a digit"),
-            }
-        })
-    });
+    fn bump(&mut self) {
+        self.cur += 1;
+    }
 
-    let exp = satisfy(|c| c == 'e' || c == 'E').with(optional(char('-')).and(integer()));
-    lex(i
-        .and(optional(char('.')).with(fractional))
-        .map(|(x, y)| if x >= 0.0 { x + y } else { x - y })
-        .and(optional(exp))
-        .map(|(n, exp_option)| match exp_option {
-            Some((sign, e)) => {
-                let e = if sign.is_some() { -e } else { e };
-                n * 10_f64.powi(e as i32)
+    fn backtrack<F, O>(&mut self, f: F) -> Result<O, ParseError>
+    where
+        F: FnOnce(&mut Self) -> Result<O, ParseError>,
+    {
+        let cur = self.cur;
+        let res = f(self);
+        match res {
+            Ok(o) => Ok(o),
+            Err(e) => {
+                self.cur = cur;
+                Err(e)
             }
-            None => n,
-        }))
-    .expected("float")
+        }
+    }
+
+    /// expression := juxtaposition
+    fn expression(&mut self) -> Result<Exp, ParseError> {
+        self.juxtaposition()
+    }
+
+    /*
+    FIXME: If we add a tuple syntax, we should add a special case for it here.
+         tuple2 = "(" expression "," expression ")"
+         atomic = tuple2 | ...
+    `if e1 then (x, y) else e2` is parsed as `(RawApp if e1 (App then (Tuple x y)) else e2)`.
+    But we want to parse it as `(RawApp if e1 then (Tuple x y) else e2)`.
+    There are two options:
+    1. Parse `suffix` as `juxtaposition` and then reconstruct to `App` later.
+    2. `identifier` filter out symbols that can be appeared in `juxtaposition`.
+
+    IMO, option 1 is better. Because it is more flexible.
+    Option 1 needs one more pass to reconstruct (parse) `RawApp`, but we needs this pass anyway (`RawApp` is raw).
+
+    Option 2 needs pre-parsing to inspect what can be appeared as symbol (not variable).
+    Implementing this makes two more passes, one for `RawApp` and one for option 2.
+    */
+
+    /// juxtaposition := suffix suffix*
+    fn juxtaposition(&mut self) -> Result<Exp, ParseError> {
+        let expr = self.suffix()?;
+        let mut exprs = vec![expr.clone()];
+        while let Ok(e) = self.backtrack(Self::suffix) {
+            dbg!(self.peek());
+            exprs.push(e);
+        }
+        if exprs.len() == 1 {
+            Ok(expr)
+        } else {
+            Ok(Exp::RawApp { exprs })
+        }
+    }
+
+    /// suffix := atomic suffix_op
+    fn suffix(&mut self) -> Result<Exp, ParseError> {
+        let mut expr = self.atomic()?;
+        while let Ok(builder) = self.backtrack(Self::suffix_op) {
+            expr = builder(expr);
+        }
+        Ok(expr)
+    }
+
+    /// suffix_op := '(' sep_end_by(expression, ',') ')'
+    fn suffix_op(&mut self) -> Result<Box<dyn Fn(Exp) -> Exp>, ParseError> {
+        match &self.peek().kind {
+            TokenKind::Symbol(s) if s == "(" => {
+                self.bump();
+                let mut args = vec![];
+                while let Ok(e) = self.expression() {
+                    args.push(e);
+                    match &self.peek().kind {
+                        TokenKind::Symbol(s) if s == ")" => break,
+                        TokenKind::Symbol(s) if s == "," => self.bump(),
+                        _ => return Err(format!("expected ',' or ')'")),
+                    }
+                }
+                match &self.peek().kind {
+                    TokenKind::Symbol(s) if s == ")" => {
+                        self.bump();
+                        Ok(Box::new(move |e| Exp::App {
+                            fun: Box::new(e),
+                            args: args.clone(),
+                        }))
+                    }
+                    _ => Err(format!("expected ')'")),
+                }
+            }
+            _ => Err("Expected operator".to_string()),
+        }
+    }
+
+    /// atomic := identifier | literal | '(' expression ')'
+    fn atomic(&mut self) -> Result<Exp, ParseError> {
+        if let Ok(ident) = self.ident() {
+            Ok(Exp::Ident(ident))
+        // } else if let Ok(lit) = self.literal() {
+        //     Ok(Exp::Literal(lit))
+        // } else if let Ok(e) = self.parens() {
+        //     Ok(e)
+        } else {
+            Err("Expected expression".to_string())
+        }
+    }
+
+    fn ident(&mut self) -> Result<Id, ParseError> {
+        fn is_ident(s: &str) -> bool {
+            RESERVED.into_iter().all(|r| r != s)
+        }
+        if let TokenKind::Symbol(s) = self.peek().kind.clone() {
+            if is_ident(s.as_str()) {
+                self.bump();
+                return Ok(Id::new(s.to_string()));
+            }
+        }
+        Err("Expected identifier".to_string())
+    }
+
+    fn literal(&mut self) -> Result<Literal, ParseError> {
+        todo!()
+    }
+
+    fn parens(&mut self) -> Result<Exp, ParseError> {
+        todo!()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lexer::Lexer;
 
     #[test]
-    fn test_identifier() {
-        let input = "abc";
-        let result = identifier().parse(input);
-        assert_eq!(result.unwrap(), (Id::new("abc".to_string()), ""));
-    }
-
-    #[test]
-    fn test_literal() {
-        let input = "123";
-        let result = literal().parse(input);
-        assert_eq!(result.unwrap(), (Literal::Int(123), ""));
-
-        let input = "123.456";
-        let result = literal().parse(input);
-        assert_eq!(result.unwrap(), (Literal::Float(123.456), ""));
-
-        let input = "\"abc\"";
-        let result = literal().parse(input);
-        assert_eq!(result.unwrap(), (Literal::String("abc".to_string()), ""));
-
-        let input = "'a'";
-        let result = literal().parse(input);
-        assert_eq!(result.unwrap(), (Literal::Char('a'), ""));
-    }
-
-    #[test]
-    fn test_atomic_expression() {
-        let input = "123";
-        let result = atomic_expression().parse(input);
-        assert_eq!(result.unwrap(), (Exp::Literal(Literal::Int(123)), ""));
-
-        let input = "(123)";
-        let result = atomic_expression().parse(input);
-        assert_eq!(result.unwrap(), (Exp::Literal(Literal::Int(123)), ""));
-
-        let input = "(f(x))";
-        let result = atomic_expression().parse(input);
+    fn test_simple_juxtaposition() {
+        let lexer = Lexer::new("a b c");
+        let mut parser = Parser::new(lexer);
+        let exp = parser.expression().unwrap();
         assert_eq!(
-            result.unwrap(),
-            (
-                Exp::App {
-                    fun: Box::new(Exp::Ident(Id::new("f".to_string()))),
-                    args: vec![Exp::Ident(Id::new("x".to_string()))],
-                },
-                ""
-            )
+            exp,
+            Exp::RawApp {
+                exprs: vec![
+                    Exp::Ident(Id::new("a".to_string())),
+                    Exp::Ident(Id::new("b".to_string())),
+                    Exp::Ident(Id::new("c".to_string())),
+                ]
+            }
         );
     }
 
     #[test]
-    fn test_suffix_operation_like() {
-        let input = "f(x, y)";
-        let result = suffix_operation_like().parse(input);
+    fn test_simple_application() {
+        let lexer = Lexer::new("f(a, b)");
+        let mut parser = Parser::new(lexer);
+        let res = parser.expression().unwrap();
         assert_eq!(
-            result.unwrap(),
-            (
-                Exp::App {
-                    fun: Box::new(Exp::Ident(Id::new("f".to_string()))),
-                    args: vec![
-                        Exp::Ident(Id::new("x".to_string())),
-                        Exp::Ident(Id::new("y".to_string())),
-                    ],
-                },
-                ""
-            )
+            res,
+            Exp::App {
+                fun: Box::new(Exp::Ident(Id::new("f".to_string()))),
+                args: vec![
+                    Exp::Ident(Id::new("a".to_string())),
+                    Exp::Ident(Id::new("b".to_string())),
+                ]
+            }
         );
     }
 
     #[test]
-    fn test_expression() {
-        let input = "f(x, y)";
-        let result = expression().parse(input);
+    fn test_application_chain() {
+        let lexer = Lexer::new("f(a, b)(c, d)");
+        let mut parser = Parser::new(lexer);
+        let res = parser.expression().unwrap();
         assert_eq!(
-            result.unwrap(),
-            (
-                Exp::App {
+            res,
+            Exp::App {
+                fun: Box::new(Exp::App {
                     fun: Box::new(Exp::Ident(Id::new("f".to_string()))),
                     args: vec![
-                        Exp::Ident(Id::new("x".to_string())),
-                        Exp::Ident(Id::new("y".to_string())),
-                    ],
-                },
-                ""
-            )
+                        Exp::Ident(Id::new("a".to_string())),
+                        Exp::Ident(Id::new("b".to_string())),
+                    ]
+                }),
+                args: vec![
+                    Exp::Ident(Id::new("c".to_string())),
+                    Exp::Ident(Id::new("d".to_string())),
+                ]
+            }
         );
     }
 }

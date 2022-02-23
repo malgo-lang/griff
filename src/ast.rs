@@ -31,6 +31,9 @@ pub enum Type {
 pub enum Exp {
     Ident(Id),
     Literal(Literal),
+    RawApp {
+        exprs: Vec<Exp>,
+    },
     App {
         fun: Box<Exp>,
         args: Vec<Exp>,
